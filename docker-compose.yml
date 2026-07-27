@@ -1,0 +1,8 @@
+services:
+  ingest:
+    build: .
+    env_file:
+      - .env
+    # Run an ad-hoc ingestion:
+    #   docker compose run --rm ingest --query "Clair de Lune"
+    # Args after the service name are passed to the ingest entrypoint.

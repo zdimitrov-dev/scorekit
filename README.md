@@ -29,7 +29,7 @@ place. Connectors and feed are stubs. See the build plan below.
 |---|---|
 | `pieces` | Canonical entity per real piece (normalized title, composer, era, difficulty). Created the first time a piece is searched or ingested. |
 | `cards` | One row per individual result (a specific video, score, or link), FK to `piece_id`. This is what renders in the feed. |
-| `interactions` | `user_id`, `card_id`/`piece_id`, `action` (like/skip/click), timestamp. The training signal for the recommender. |
+| `interactions` | `user_id`, `card_id`/`piece_id`, `action` (like/skip/click), `dwell_ms`, `feed_position`, timestamp. The recommender's training signal. `skip` is the negative (no explicit dislike, TikTok-style); `dwell_ms` is the engagement-intensity weight layered on top of the action; `feed_position` is stored for later position-bias correction. |
 | `piece_tags` | composer, era, mood, difficulty and other features the recommender learns over. |
 
 Cards from different sources are **never merged** into a single grouped result —

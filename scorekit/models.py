@@ -29,3 +29,17 @@ class Piece:
     era: str | None = None
     genre: str | None = None
     difficulty: int | None = None
+
+
+@dataclass
+class Interaction:
+    """A single logged signal. Written by the feed (Phase 5), consumed by the
+    recommender (Phase 6). ``action`` is the label; ``dwell_ms`` is the
+    engagement-intensity weight (skip = negative, longer dwell = higher confidence).
+    """
+    user_id: str
+    action: str                      # 'like' | 'skip' | 'click'
+    card_id: str | None = None
+    piece_id: str | None = None
+    dwell_ms: int | None = None      # engagement duration on the card before the action
+    feed_position: int | None = None  # rank in the feed when shown; stored, unused in v1 model

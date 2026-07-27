@@ -56,15 +56,31 @@ create table if not exists cards (
 );
 
 -- ---------------------------------------------------------------------------
--- interactions: training signal for the recommender
+-- interactions: the recommender's training signal (append-only event log)
+--
+-- Signal model (V1): every card shown-and-swiped logs one row.
+--   like  -> strong positive
+--   click -> positive (user opened the source resource)
+--   skip  -> negative  (there is no explicit "dislike"; skip IS the negative,
+--                       TikTok-style — absence of engagement is the signal)
+--
+-- dwell_ms is the engagement-intensity weight layered on top of `action`: how
+-- long the card was in focus before the user acted. A fast skip is a strong
+-- negative; a long dwell is a confidence boost even without a like (watch-time-
+-- style implicit signal). It is dwell time on the card in the feed, so it is
+-- comparable across all three sources. Nullable: not every event captures it.
 -- ---------------------------------------------------------------------------
 create table if not exists interactions (
   id          bigint generated always as identity primary key,
   user_id     uuid not null,
   card_id     uuid references cards(id) on delete set null,
   piece_id    uuid references pieces(id) on delete set null,
-  action      interaction_action not null,
-  created_at  timestamptz not null default now()
+  action        interaction_action not null,
+  dwell_ms      integer  check (dwell_ms is null or dwell_ms >= 0),
+  -- rank of the card in the feed when shown (0-based). Stored for position-bias
+  -- correction later; intentionally NOT used by the first-pass recommender.
+  feed_position smallint check (feed_position is null or feed_position >= 0),
+  created_at    timestamptz not null default now()
 );
 
 -- ---------------------------------------------------------------------------

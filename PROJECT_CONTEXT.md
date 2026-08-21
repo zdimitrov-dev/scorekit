@@ -1,10 +1,8 @@
 # scorekit — Project Context
 
-> **If you are an AI assistant picking this project up on a fresh machine: read this
-> file first, in full.** It is the single source of truth for what scorekit is, why
-> it exists, how it is built, what is done, and what comes next. When you make a
-> meaningful change to the project's state or direction, **update this file** (see
-> [Keeping this file current](#keeping-this-file-current) at the bottom).
+> **Start here.** This is the primary context document for scorekit — the design,
+> current state, and roadmap in one place. Keep it in sync with the code as the
+> project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
 **Last updated:** 2026-08-21 · **Phase:** 0 complete → provisioning Supabase ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
@@ -51,26 +49,7 @@ Piano learners face a two-part discovery gap no single tool covers:
 
 ---
 
-## 3. Why this project exists (portfolio rationale — read before making design calls)
-
-This is a portfolio project deliberately built to close a specific gap: strong data
-engineering fundamentals but no demonstrated **ML / product-building** experience.
-It is designed as **two separately defensible stories**:
-
-- **Data engineering story:** multi-source ingestion pipeline (YouTube Data API,
-  IMSLP, Google Custom Search), normalization into a shared schema, caching,
-  scheduled jobs. An extension of prior group-project experience — this time solo.
-- **AI/ML story:** a *genuine* recommendation engine trained on real interaction
-  data — **not an LLM wrapper**. This is the actual differentiator and is given the
-  most protected build time (Phase 6), rather than being rushed at the end.
-
-**Design implication for any assistant:** favor decisions that make the ML story
-real and legible (interpretable signal design, honest features, clear evaluation)
-over clever shortcuts. The recommender is the point, not the plumbing.
-
----
-
-## 4. Tech stack & architecture
+## 3. Tech stack & architecture
 
 - **Backend:** Python 3.13, scheduled ingestion jobs per source.
 - **Storage:** Supabase (managed Postgres).
@@ -78,7 +57,7 @@ over clever shortcuts. The recommender is the point, not the plumbing.
 - **Frontend (later, Phase 4+):** Pinterest-style masonry feed, swipe like/skip.
   Framework not yet chosen.
 - **Deployment (later, Phase 7):** own domain/subdomain, linked from the personal
-  portfolio site (`personalweb` repo → https://github.com/zdimitrov-dev/personalweb).
+  site (`personalweb` repo → https://github.com/zdimitrov-dev/personalweb).
 
 ### Pipeline shape
 `query → each Connector.search() → normalized Card objects → (Phase 1+) upsert
@@ -87,11 +66,11 @@ interactions logged → (Phase 6) recommender ranks the home feed.`
 
 ---
 
-## 5. Repository structure
+## 4. Repository structure
 
 ```
 scorekit/
-├── PROJECT_CONTEXT.md      # ← this file (read first)
+├── PROJECT_CONTEXT.md      # ← this file (start here)
 ├── README.md               # public-facing overview, setup, phase plan
 ├── .env.example            # env var template (copy to .env, which is gitignored)
 ├── requirements.txt        # supabase, python-dotenv, httpx, tenacity,
@@ -121,7 +100,7 @@ scorekit/
 
 ---
 
-## 6. Data model (detailed — this drives the ML design)
+## 5. Data model (detailed — this drives the ML design)
 
 Defined in `db/schema.sql`. Four tables + three enums. The mirroring Python
 dataclasses live in `scorekit/models.py`.
@@ -135,7 +114,7 @@ A piano recommender answers two different questions that need different data:
 
 `interactions` ties a user to both at once. This split lets the model **decompose**
 a preference (`taste for piece × taste for format`), which means far more signal
-per interaction — critical for learning from a small solo-project dataset.
+per interaction — important early on, while interaction data is still sparse.
 
 ### `pieces` — canonical entity per real piece
 `id, slug (unique), title, composer, era, genre, difficulty (smallint, nullable),
@@ -158,7 +137,7 @@ thumbnail_url, author, metadata (jsonb), created_at, unique(source, external_id)
   or target-encoding later.
 - **`metadata jsonb`** is the escape hatch for source-specific fields (view count,
   duration, whether the description had a sheet-music link, MuseScore difficulty).
-- **`unique(source, external_id)`** prevents duplicate ingestion (ML data hygiene).
+- **`unique(source, external_id)`** prevents duplicate ingestion (data hygiene).
 - **Design principle: cards from different sources are NEVER merged** into one
   grouped result. Each is its own card in a mixed feed (like Pinterest).
   Normalization is quiet, behind the scenes, only via `piece_id`.
@@ -207,11 +186,11 @@ score, listing)` · `interaction_action(like, skip, click)`
 
 ---
 
-## 7. Recommendation engine plan (Phase 6 — the centerpiece)
+## 6. Recommendation engine plan (Phase 6)
 
-Do not rush this phase. The schema is built to support this progression
-(simplest → most impressive, which also tells a good "I built up, didn't jump to a
-neural net" interview story):
+The schema is built to support this progression, deliberately building up from
+simple, interpretable baselines to more complex models rather than starting with a
+black box:
 
 1. **Candidate generation** — content (`piece_tags` reverse lookup) + collaborative
    (co-liked pieces).
@@ -226,13 +205,13 @@ neural net" interview story):
 4. **Model options (build up in this order):**
    - Popularity + tag-overlap heuristic → the cold-start / new-user diverse feed.
    - Logistic regression / gradient-boosted trees over engineered features →
-     `P(like | user, card)`. Interpretable; strong portfolio baseline.
+     `P(like | user, card)`. Interpretable baseline.
    - ALS / matrix factorization on the implicit `user × piece` matrix (collaborative).
    - Two-tower embedding model (user tower / item tower) → the scalable version.
 5. **Ranking + exploration** — score candidates, inject diversity so the feed isn't
    monotonous and to keep gathering exploration signal.
 
-### ML gotchas already accounted for / to remember
+### ML considerations already accounted for / to remember
 - **Cold start** is handled by content features (`piece_tags`) — the schema's key
   ML enabler. New pieces and new users both have a path.
 - **`dwell_ms` must be normalized *within* `(source, kind)`** before use — 3s on a
@@ -244,7 +223,7 @@ neural net" interview story):
 
 ---
 
-## 8. Build phases roadmap
+## 7. Build phases roadmap
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -254,16 +233,17 @@ neural net" interview story):
 | 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | ⛔ |
 | 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
-| 6 | Recommendation engine / home feed — **the ML centerpiece** | ⛔ Protect this time |
-| 7 | Polish + deploy (branding, domain, README, demo video) | ⛔ |
+| 6 | Recommendation engine / home feed | ⛔ |
+| 7 | Polish + deploy (branding, domain, demo) | ⛔ |
 
-Phases 0–4 are mechanically similar to prior pipeline work and should move fast.
-**Phases 5–6 are new territory and deserve the most protected time** — the biggest
-risk to the plan is letting early plumbing eat the schedule for the differentiator.
+Phases 0–4 are mostly mechanical pipeline work and should move quickly. Phases 5–6
+are the most technically novel and deserve the most protected time — the main
+scheduling risk is letting the earlier plumbing phases consume the time budgeted for
+the recommender.
 
 ---
 
-## 9. Current state in detail (what works vs what's a stub)
+## 8. Current state in detail (what works vs what's a stub)
 
 **Genuinely working:**
 - `db/schema.sql` — complete, idempotent, final for V1. *Not yet applied to a DB.*
@@ -286,7 +266,7 @@ risk to the plan is letting early plumbing eat the schedule for the differentiat
 
 ---
 
-## 10. Local setup / dev
+## 9. Local setup / dev
 
 ```bash
 # 1. Env
@@ -319,13 +299,8 @@ docker compose run --rm ingest --query "Clair de Lune"
 
 ---
 
-## 11. Conventions & decisions
+## 10. Conventions
 
-- **Git identity:** commit as `Zarko <zarkodimitrovdev@gmail.com>` (set as the local
-  `user.email` in this repo).
-- **No AI attribution in commits.** Do **not** add a `Co-Authored-By: Claude` (or
-  any AI) trailer, and don't mention AI authorship in commit messages. The owner
-  explicitly does not want it.
 - **Commit style:** concise imperative subject; body explaining the *why* when the
   change isn't obvious.
 - **Secrets:** only ever in `.env` (gitignored). Never commit keys; never send the
@@ -335,10 +310,10 @@ docker compose run --rm ingest --query "Clair de Lune"
 
 ---
 
-## 12. Open questions / decisions pending
+## 11. Open questions / decisions pending
 
-- **Frontend framework** for the feed (Phase 4) — not chosen. The owner's personal
-  site is Next.js/TypeScript, so that's a natural candidate.
+- **Frontend framework** for the feed (Phase 4) — not chosen. The personal site is
+  Next.js/TypeScript, so that's a natural candidate.
 - **`users` table** — `interactions.user_id` is a bare uuid; wire it to Supabase
   `auth.users` when auth is added.
 - **Scheduling** — ingestion is a CLI job today; the "scheduled jobs" story
@@ -347,25 +322,19 @@ docker compose run --rm ingest --query "Clair de Lune"
 
 ---
 
-## 13. External resources
+## 12. External resources
 
 - **scorekit repo:** https://github.com/zdimitrov-dev/scorekit
 - **Personal site repo (`personalweb`):** https://github.com/zdimitrov-dev/personalweb
   — links to scorekit from its projects section (`src/lib/config.ts`).
-- **Supabase dashboard:** https://supabase.com/dashboard (owner's account).
+- **Supabase dashboard:** https://supabase.com/dashboard
 
 ---
 
 ## Keeping this file current
 
-This file is the handoff contract between work sessions and devices. **When you
-change the project's state or direction, update the relevant section here in the
-same session** — especially:
-- the **Status at a glance** table and **Current state in detail** when something
-  moves from stub → built,
-- the **phases roadmap** status column when a phase starts/finishes,
-- **Open questions** as they're resolved,
-- and the **Last updated** date at the top.
-
-Keep it accurate over comprehensive: if something here no longer matches the code,
-fix it. An assistant on another device is trusting this file to be true.
+This document is the project's living source of truth. Keep it in sync with the code
+as the project evolves — update the **Status at a glance** table and **Current state
+in detail** when something moves from stub to built, the **phases roadmap** when a
+phase starts or finishes, **Open questions** as they're resolved, and the **Last
+updated** date at the top. If something here no longer matches the code, fix it.

@@ -301,6 +301,8 @@ docker compose run --rm ingest --query "Clair de Lune"
 
 ## 10. Conventions
 
+- **Git — commit locally, do not push:** make local commits as you work, but never
+  `git push`. The maintainer reviews and pushes.
 - **Commit style:** concise imperative subject; body explaining the *why* when the
   change isn't obvious.
 - **Secrets:** only ever in `.env` (gitignored). Never commit keys; never send the

@@ -22,6 +22,9 @@ If anything in the doc no longer matches the code, fix it.
 
 ## Conventions
 
+- **Git: commit locally, do not push.** Make local commits as you work, but do not
+  run `git push` — the maintainer reviews and pushes. After committing, note that the
+  change is committed locally and ready to push.
 - Commit style and secret handling are documented in `PROJECT_CONTEXT.md` →
   Conventions.
 - Never commit secrets. They live only in `.env`, which is gitignored.

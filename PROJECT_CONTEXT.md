@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-21 · **Phase:** 0 complete → provisioning Supabase ·
+**Last updated:** 2026-08-22 · **Phase:** 0 complete → provisioning Supabase ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -126,6 +126,16 @@ created_at, updated_at`
 - `composer/era/genre/difficulty` are content features and the basis for
   **cold-start** recommendations (a brand-new piece can be recommended immediately).
 - `difficulty` is nullable → the model must handle "unknown difficulty."
+- **Decision (2026-08-22): `difficulty` stays in the schema but is quarantined —
+  nothing in the recommender may depend on it until we work out how to measure and use
+  it properly.** Two reasons it needs care: (a) it is genuinely hard to measure, and
+  (b) it is really a property of the *rendition*, not the piece — a simplified
+  arrangement of *La Campanella* and the original differ enormously, even though
+  *Twinkle Twinkle* will always be far easier than either. So `pieces.difficulty` is at
+  most a coarse **piece-level prior** (how hard the canonical version is), while
+  **per-rendition difficulty belongs in `cards.metadata`** (e.g. a MuseScore difficulty
+  rating). Like `feed_position`, it is stored now and deliberately excluded from the
+  first-pass model.
 
 ### `cards` — one row per result (what actually renders)
 `id, piece_id (FK, on delete cascade), source, kind, external_id, url, title,
@@ -188,6 +198,21 @@ score, listing)` · `interaction_action(like, skip, click)`
 
 ## 6. Recommendation engine plan (Phase 6)
 
+**What this demonstrates (project framing).** scorekit is deliberately a showcase of the
+two foundational recommender paradigms *and* the judgment to combine them:
+- **Content-based filtering** — learning from *given* labeled tags (`piece_tags`:
+  composer, era, mood, difficulty). Interpretable; solves cold-start.
+- **Collaborative filtering** — learning latent taste from *other users' signals* (the
+  `interactions` matrix). Scales; captures nuance no tag set can enumerate.
+- **The hybrid / handoff** — the senior skill: knowing each one's failure mode and
+  engineering the transition (content carries the low-data regime; collaborative is
+  promoted once it beats the content+popularity baseline — see the data flywheel below).
+
+The "separate *what* from *how*" schema (`pieces`/`piece_tags` vs. the `interactions`
+log) was designed to support both from the start, so the data model itself is evidence
+of the plan. Natural demonstration artifact: a head-to-head of content-only vs.
+collaborative vs. hybrid on the same held-out interactions, with the same metrics.
+
 The schema is built to support this progression, deliberately building up from
 simple, interpretable baselines to more complex models rather than starting with a
 black box:
@@ -220,6 +245,129 @@ black box:
 - **Position bias** is captured (`feed_position`) but quarantined from the first
   model on purpose. Introduce it deliberately later.
 - **Temporal split** for train/test (use `created_at`) to avoid leaking the future.
+
+### Features: given vs. learned (why sparse tags are not fatal)
+
+A key reframe for the whole project. Every training example has two parts, and they
+come from different places:
+
+- **The label** = the interaction (`like`/`skip`/`click` + `dwell_ms`). We *have* this;
+  it is genuine supervised signal. Logging it is easy. **This project is supervised
+  learning, not unsupervised** — the "it feels unlabeled" worry is about missing
+  *features*, not missing labels.
+- **The features** = how a piece is represented. These can be **given** or **learned**:
+  - **Given** — explicit tags in `piece_tags` (composer, era, mood…). Hard to obtain,
+    especially for pop/modern pieces that no catalog describes.
+  - **Learned** — latent embeddings inferred *from the interaction matrix itself*
+    (collaborative filtering / matrix completion — the "Netflix Prize" approach). Sad
+    pieces end up with similar vectors because the same people co-like them; a latent
+    "sadness/energy" axis **emerges from behavior with no mood tag ever written.**
+
+Consequences:
+- The tag-quality problem is therefore a **cold-start** problem, not a fundamental
+  blocker. Tags carry the **low-data** regime; learned features take over as
+  interactions accumulate — and capture "mood" better than crude tags ever could.
+- The two methods' weaknesses are **anti-correlated with the catalog**: classical =
+  good tags / fewer plays → **content** carries it; pop/modern = poor tags / many plays
+  → **collaborative** carries it. So we do *not* need to win the "hand-tag every pop
+  song" fight.
+- Third feature source for genuinely unlabeled pieces: **audio-derived features**
+  (major/minor mode, tempo, energy, "valence" = a measured happy↔sad axis) computed
+  from the recording itself — unsupervised extraction that needs no catalog or label.
+  (Ready-made sources like Spotify's audio-features API are largely closed to new apps
+  since late 2024, so plan to compute these from audio, e.g. librosa. Later refinement.)
+- **Deferred:** a proper walkthrough of matrix completion / the Netflix-Prize analogy
+  belongs with the Phase 6 build, not here.
+
+### Evaluation & data bootstrapping (intended — not yet built)
+
+**How we will know the recommender actually works.** The plan is an *offline*
+evaluation: split `interactions` by `created_at` into a **temporal train/test split**
+(train on the earlier events, test on the later ones — never a random shuffle, or the
+model gets to "see the future"), fit the model on the train half, then measure how well
+it predicts the held-out half — i.e. did it rank the pieces the user actually
+liked/clicked above the ones they skipped.
+
+- **The exact success metric is still open.** How to score "is it recommending well" is
+  not yet decided — candidates are ranking metrics like precision@k / recall@k, NDCG,
+  MAP, or AUC over the like/skip label. To be pinned down when the recommender is built.
+  See Open questions.
+- **Data scarcity is the first obstacle.** A fresh system has almost no interactions,
+  and a taste model cannot be trained *or* evaluated without a meaningful volume of
+  labeled swipes. We need a way to bootstrap a dataset:
+  - **Manual dogfooding** — actually use the app and swipe. Honest signal, but slow: one
+    human produces data at human speed.
+  - **Synthetic generation via Claude (likely).** Define a handful of taste profiles and
+    have Claude simulate users — generating large volumes of plausible like/skip/dwell
+    interactions across the catalog far faster than a human could. Enough volume to
+    exercise the pipeline and shake out the model. Caveat: synthetic taste only
+    approximates real users, so results must be validated against real (manual) data
+    before being trusted.
+
+### Testing the recommender before we have a user base
+
+The chicken-and-egg — "can't validate collaborative filtering without lots of users,
+can't get users without shipping, can't ship without validating" — is resolved by not
+requiring the data-hungry model to ship first. Four independent tools:
+
+1. **Public benchmark datasets** — validate the CF *machinery* (ALS / matrix
+   factorization / two-tower) is correct on established data with known baselines,
+   *independent of scorekit's own data*: MovieLens (the canonical benchmark) and, closer
+   to our domain, the Million Song Dataset / Last.fm Taste Profile (user × song implicit
+   feedback, like our like/skip). If our model can't match published baselines here, the
+   code is wrong — caught before any scorekit data exists.
+2. **Synthetic ground-truth simulation** — generate an interaction matrix from a *known*
+   latent taste model over our **real ingested pieces**: define K taste dimensions, give
+   synthetic users taste vectors, draw likes via `P(like)=sigmoid(user·piece)+noise`.
+   Because we know the true generating structure, we have perfect ground truth: does the
+   model *recover* it and predict held-out likes? Claude makes the personas realistic
+   (coherent "loves melancholic nocturnes, hates showpieces" users) rather than random.
+   **Caveat:** generate with a *different/more complex* process than the model under test
+   (nonlinearity, popularity bias, noise) or you rig the test; this validates the
+   *mechanism*, never real human taste.
+3. **Baselines + metrics** — always score against **random** and **most-popular**. A
+   collaborative model that can't beat "just recommend the most popular pieces" is not
+   working. Report precision@k / recall@k / NDCG / AUC plus coverage & diversity.
+4. **The data flywheel (the actual launch plan)** — ship v1 with the **content/tag +
+   popularity** model, which works at *zero* interaction history (cold-start by design)
+   and is testable on small/synthetic data. It is useful on day one **and** generates
+   real interactions. Train the collaborative model in the background on that accruing
+   data, and **promote it only once offline evaluation on the real accumulated data
+   beats the tag+popularity baseline.** So we never ship a model we haven't validated —
+   we ship the one that provably works without data, and gate the data-hungry one behind
+   a metric threshold measured on the data the live product itself produces. Optional
+   accelerants: **warm-start** (pretrain on public data, fine-tune on ours) to need less
+   of our own data, and a **closed beta** (piano community / dogfooding) to reach the
+   hundreds-of-users range where collaborative filtering starts to bite.
+
+### External data: benchmarking + warm-start (decision, 2026-08-22)
+
+Two sanctioned roles for third-party listening data (e.g. MSD Taste Profile / Last.fm),
+both bounded so the *live, shipped* model still learns primarily from scorekit's own
+signal:
+
+1. **Benchmarking (offline only)** — validate the collaborative machinery against known
+   baselines; never part of the shipped product.
+2. **Warm-start prior (cold-start only)** — when there is little signal about a user,
+   external listening gives *marginally-better-than-random* recommendations, on the
+   premise that general listening taste partially transfers to piano taste. As scorekit
+   accumulates that user's own swipes — far more specific to their *piano* taste — the
+   app's own signal takes over. Run it as an **ablation** ("cold-start with warm-start
+   vs. without") so it demonstrates transfer learning rather than acting as a hidden
+   crutch.
+
+**This warm-start is collaborative, not content-based.** It rides on *item
+co-occurrence* ("people who listen to piece A also listen to piece B"), not intrinsic
+attributes (happy/sad/classical). It yields piece↔piece affinity, and the "separate
+*what* from *how*" schema then carries that across formats: external data says A ≈ B
+(the *what*); the user just engaged with the piano *cover* of A (the *how*, from our own
+`cards`/`piece_id`), so recommend the piano *cover* of B. That cross-format hop is the
+hybrid in miniature.
+
+**Open sub-question — what seeds a brand-new user?** Aggregate external co-occurrence
+only personalizes once the user has touched ≥1 piece here (then: its neighbors). True
+zero-interaction personalization needs the *user's own* external history (e.g. linking a
+Last.fm account — a consent/privacy step). Decide which warm-start seed to support.
 
 ---
 
@@ -321,6 +469,14 @@ docker compose run --rm ingest --query "Clair de Lune"
 - **Scheduling** — ingestion is a CLI job today; the "scheduled jobs" story
   (cron/Supabase scheduled functions/etc.) is not yet built.
 - **IMSLP terms** — confirm current access terms before building the Phase 2 connector.
+- **Recommender evaluation metric** — how exactly to score "is it recommending well"
+  (precision@k / NDCG / AUC / …) is not yet decided. See §6 → Evaluation & data
+  bootstrapping.
+- **Training-data bootstrapping** — how to accumulate enough interaction data to train
+  and evaluate: manual dogfooding vs. Claude-generated synthetic interactions. See §6.
+- **`difficulty` usage** — how to measure and actually use difficulty (piece-level prior
+  vs. per-rendition in `cards.metadata`) is unresolved; quarantined from the model until
+  then. See §5 → `pieces`.
 
 ---
 

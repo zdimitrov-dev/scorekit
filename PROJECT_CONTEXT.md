@@ -17,15 +17,14 @@
 | Database schema (`db/schema.sql`) | ✅ Applied to live Supabase; RLS enabled on all tables |
 | Supabase project | ✅ Provisioned — schema applied, RLS on, `.env` filled & connection verified |
 | Docker image build | ⛔ Not built/verified yet |
-| Source connectors | 🟡 YouTube built + unit-tested (needs API key); IMSLP/MuseScore still stubs |
+| Source connectors | 🟡 YouTube **live** (enrichment, compilation flag, `- Topic` filter); IMSLP/MuseScore still stubs |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI / swipe / recommender | ⛔ Not started (Phases 4–6) |
 
-**The immediate next action:** add a `YOUTUBE_API_KEY` to `.env` (Google Cloud →
-enable YouTube Data API v3 → API key), then run the ingest job live
-(`python -m scorekit.jobs.ingest --query "Clair de Lune"`) to confirm the first real
-end-to-end slice writes cards to Supabase. The connector, persistence, and unit tests
-already exist and pass; only the live API key is missing.
+**The immediate next action:** Phase 1 runs end-to-end live — the YouTube connector
+searches, enriches (`videos.list`), and upserts cards to Supabase. Next is either the
+IMSLP connector (Phase 2) or starting the feed UI (Phase 4). Open YouTube refinements:
+result pagination (>50), richer `kind` detection, and a stale-card reconcile step.
 
 ---
 
@@ -379,7 +378,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
-| 1 | YouTube connector (first end-to-end slice) | 🟡 In progress — connector + persistence built & unit-tested; needs a live API key to run |
+| 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
 | 2 | IMSLP connector | ⛔ Confirm IMSLP terms before building |
 | 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | ⛔ |
 | 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
@@ -405,9 +404,11 @@ the recommender.
   --query "..."`); iterates the connector registry, skips connectors that are not built
   or unconfigured (`NotImplementedError` / `ConnectorUnavailable`), and — unless
   `--dry-run` — upserts the piece + cards into Supabase via `scorekit/store.py`.
-- `scorekit/connectors/youtube.py` — **implemented & unit-tested** (Phase 1): YouTube
-  Data API search → normalized `Card`s, with `kind` heuristics and sheet-music-link
-  capture in `metadata`. Needs a live `YOUTUBE_API_KEY` to hit the real API.
+- `scorekit/connectors/youtube.py` — **implemented, unit-tested & verified live** (Phase 1):
+  two-step `search.list` + `videos.list` → normalized `Card`s with full-description
+  sheet-music-link capture, `duration_seconds`/`view_count` in `metadata`, a compilation
+  flag (`is_compilation`, tunable threshold; word-boundary title cues), `kind` heuristics,
+  and exclusion of auto-generated `- Topic` channels.
 - `scorekit/store.py` — **implemented & verified live**: upserts pieces (by `slug`) and
   cards (dedup on `source,external_id`); unit-tested with a fake client.
 - `scorekit/config.py`, `scorekit/db.py` — real code, **verified against the live

@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) framework laid ·
+**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) search live-verified ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -21,12 +21,13 @@
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI / swipe / recommender | ⛔ Not started (Phases 4–6) |
 
-**The immediate next action:** Phase 1 runs end-to-end live (YouTube search + enrich +
-persist). The IMSLP connector (Phase 2) is now scaffolded but **inert** — to activate it:
-confirm IMSLP's terms of use, set `IMSLP_ENABLED=1`, and verify the live search against
-IMSLP (only the pure parsing is unit-tested so far), then add per-page enrichment
-(license, PDF links, thumbnail). Alternatively start the feed UI (Phase 4). Open YouTube
-refinements: pagination (>50), richer `kind` detection, stale-card reconcile.
+**The immediate next action:** YouTube and IMSLP both return good results in a dry run
+(no writes). IMSLP search is now **live-verified** (HTTP 200 JSON; redirect pages
+filtered; composer parsed incl. unicode). Remaining IMSLP work: per-page **enrichment**
+(per-file license, PDF links, thumbnail) and a first real (non-dry-run) ingest to
+Supabase — plus confirming IMSLP's terms of use before production volume. Alternatively
+start the feed UI (Phase 4). Open YouTube refinements: pagination (>50), richer `kind`
+detection (dry run showed plain performances classify as `None`), stale-card reconcile.
 
 ---
 
@@ -387,7 +388,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 |---|---|---|
 | 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
 | 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
-| 2 | IMSLP connector | 🟡 Framework laid (MediaWiki search + composer parse, unit-tested), gated & inert until `IMSLP_ENABLED`; confirm IMSLP terms + verify live, then enrich |
+| 2 | IMSLP connector | 🟡 Search live-verified (composer parse, redirect filter), gated by `IMSLP_ENABLED`; TODO: per-page enrichment + real ingest; confirm IMSLP terms before production |
 | 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | ⛔ |
 | 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
@@ -423,13 +424,14 @@ the recommender.
   Supabase backend** (connection + reads/writes confirmed).
 - `Dockerfile` / `docker-compose.yml` — structurally complete; **image not built yet.**
 
-**Framework laid, inert:**
-- `scorekit/connectors/imslp.py` — **Phase 2 framework, off by default.** MediaWiki
-  search + IMSLP `Title (Surname, Forename)` composer parsing → `score` cards; pure
-  logic unit-tested (`tests/test_imslp.py`). Gated by `IMSLP_ENABLED` (raises
-  `ConnectorUnavailable` until set), so the ingest job skips it. The live search path
-  is written to MediaWiki's contract but **not yet verified against IMSLP**; per-page
-  enrichment (license, PDF links, thumbnail) is TODO.
+**Framework laid (search live-verified), gated by `IMSLP_ENABLED`:**
+- `scorekit/connectors/imslp.py` — MediaWiki search + IMSLP `Title (Surname, Forename)`
+  composer parsing → `score` cards; unit-tested (`tests/test_imslp.py`). Gated by
+  `IMSLP_ENABLED` (raises `ConnectorUnavailable` until set). **Verified live against
+  IMSLP (HTTP 200 JSON):** composer parsing works incl. unicode; **redirect pages are
+  filtered out**; IMSLP's search omits `pageid`, so the canonical page title is the
+  `external_id`. Per-page enrichment (per-file license, direct PDF links, thumbnail)
+  and a first real ingest to Supabase are still TODO.
 
 **Stubbed / not started:**
 - `musescore.py` connector — `.search()` raises `NotImplementedError` (Phase 3).

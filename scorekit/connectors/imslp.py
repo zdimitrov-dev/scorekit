@@ -115,10 +115,18 @@ class ImslpConnector(Connector):
         page_title = result.get("title")
         if not page_title:
             return None
+        snippet = _strip_html(result.get("snippet", ""))
+        # IMSLP search also returns redirect pages; a redirect points at a real
+        # work page rather than being one, so skip it (its content is "#REDIRECT
+        # [[Target]]"). Verified live: these otherwise leak in as duplicate cards.
+        if snippet.upper().startswith("#REDIRECT"):
+            return None
         work_title, composer = _parse_title(page_title)
         return Card(
             source=self.source,
-            external_id=str(result.get("pageid") or page_title),
+            # IMSLP's search response omits pageid, so the canonical page title —
+            # stable and unique — is the external_id / dedup key.
+            external_id=page_title,
             url=_work_url(page_title),
             title=work_title,
             kind="score",
@@ -126,9 +134,8 @@ class ImslpConnector(Connector):
             author=composer,         # composer/arranger; IMSLP is authoritative for classical
             metadata={
                 "imslp_page_title": page_title,
-                "pageid": result.get("pageid"),
                 "composer": composer,
-                "snippet": _strip_html(result.get("snippet", "")),
+                "snippet": snippet,
                 # TODO(enrich): per-file license (many are Public Domain / CC),
                 # direct PDF download links, instrumentation, arranger.
             },

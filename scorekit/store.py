@@ -1,0 +1,58 @@
+"""Persistence helpers — upsert normalized pieces and cards into Supabase.
+
+Kept separate from the connectors (which only *produce* Cards) and from the
+ingest orchestrator (which decides *when* to persist), so the write path is easy
+to test in isolation with an injected client.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from .db import get_client
+from .models import Card, Piece
+
+
+def upsert_piece(piece: Piece, client: Any = None) -> str:
+    """Insert or update a piece by its unique ``slug``; return its ``id``.
+
+    ``None`` fields are dropped so an update never overwrites an existing value
+    (e.g. a known ``composer``) with null.
+    """
+    client = client or get_client()
+    payload = {
+        "slug": piece.slug,
+        "title": piece.title,
+        "composer": piece.composer,
+        "era": piece.era,
+        "genre": piece.genre,
+        "difficulty": piece.difficulty,
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    result = client.table("pieces").upsert(payload, on_conflict="slug").execute()
+    return result.data[0]["id"]
+
+
+def upsert_cards(piece_id: str, cards: list[Card], client: Any = None) -> int:
+    """Insert or update cards for a piece, de-duplicated on ``(source, external_id)``.
+
+    Returns the number of card rows written.
+    """
+    if not cards:
+        return 0
+    client = client or get_client()
+    rows = [
+        {
+            "piece_id": piece_id,
+            "source": c.source,
+            "kind": c.kind,
+            "external_id": c.external_id,
+            "url": c.url,
+            "title": c.title,
+            "thumbnail_url": c.thumbnail_url,
+            "author": c.author,
+            "metadata": c.metadata or {},
+        }
+        for c in cards
+    ]
+    result = client.table("cards").upsert(rows, on_conflict="source,external_id").execute()
+    return len(result.data)

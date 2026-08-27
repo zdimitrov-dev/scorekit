@@ -1,7 +1,7 @@
 """Source connectors. Each returns a list of source-agnostic ``Card`` objects."""
 from __future__ import annotations
 
-from .base import Connector
+from .base import Connector, ConnectorUnavailable
 from .imslp import ImslpConnector
 from .musescore import MuseScoreConnector
 from .youtube import YouTubeConnector
@@ -15,6 +15,7 @@ CONNECTORS: list[type[Connector]] = [
 
 __all__ = [
     "Connector",
+    "ConnectorUnavailable",
     "YouTubeConnector",
     "ImslpConnector",
     "MuseScoreConnector",

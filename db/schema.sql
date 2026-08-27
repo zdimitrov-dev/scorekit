@@ -100,3 +100,18 @@ create index if not exists idx_cards_piece         on cards(piece_id);
 create index if not exists idx_interactions_user   on interactions(user_id, created_at desc);
 create index if not exists idx_interactions_piece  on interactions(piece_id);
 create index if not exists idx_piece_tags_kv       on piece_tags(key, value);
+
+-- ---------------------------------------------------------------------------
+-- Row-Level Security
+--
+-- Secure-by-default: enable RLS on every table so the public/anon API key has
+-- NO access until explicit policies are added (planned with the frontend/auth
+-- in Phases 4-5 — e.g. public read of pieces/cards, and a user writing/reading
+-- only their own interactions). The backend ingestion uses the service_role
+-- key, which BYPASSES RLS, so enabling this does not affect the jobs.
+-- Idempotent: re-enabling on an already-secured table is a no-op.
+-- ---------------------------------------------------------------------------
+alter table pieces       enable row level security;
+alter table cards        enable row level security;
+alter table interactions enable row level security;
+alter table piece_tags   enable row level security;

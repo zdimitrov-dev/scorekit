@@ -9,6 +9,7 @@ from scorekit.connectors.youtube import (
     _classify_kind,
     _extract_sheet_links,
     _is_compilation,
+    _is_remix,
     _is_topic_channel,
     _parse_duration,
 )
@@ -131,6 +132,13 @@ def test_is_compilation():
     assert _is_compilation("4 Hours of Piano", 60) is True               # 'hours' cue
 
 
+def test_is_remix():
+    assert _is_remix("Clair de Lune Ethereal Remix") is True
+    assert _is_remix("Debussy Clair de Lune (Rework)") is True
+    assert _is_remix("Debussy - Clair de Lune") is False
+    assert _is_remix("A cover of Clair de Lune") is False   # a cover is not a remix
+
+
 def test_extract_sheet_links():
     desc = "sheets https://musescore.com/x and https://imslp.org/y plus https://example.com/z"
     links = _extract_sheet_links(desc)
@@ -154,6 +162,7 @@ def test_search_enriches_skips_non_videos_and_topic_channels():
     assert first.metadata["duration_seconds"] == 510
     assert first.metadata["view_count"] == 12345
     assert first.metadata["is_compilation"] is False
+    assert first.metadata["is_remix"] is False
     assert first.metadata["has_sheet_music_link"] is True              # from FULL description
     assert first.metadata["sheet_music_links"] == ["https://musescore.com/u/1/s/2"]
 

@@ -485,6 +485,15 @@ docker compose run --rm ingest --query "Clair de Lune"
 - **`difficulty` usage** — how to measure and actually use difficulty (piece-level prior
   vs. per-rendition in `cards.metadata`) is unresolved; quarantined from the model until
   then. See §5 → `pieces`.
+- **Ingest-by-channel / search-by-author** (potential next step) — browsing by creator is
+  a feed filter over the existing `cards.author` (nearly free once the feed exists);
+  optionally add a YouTube *by-channel* ingestion mode to pull a creator's whole catalog
+  (e.g. the pianist "Birru"). Hard part: resolving a creator's freeform titles to piece
+  slugs.
+- **Composer sourcing beyond the search query** — `composer` is currently caller-supplied
+  (the `--composer` arg), never derived from YouTube. Future options: IMSLP / MuseScore /
+  Wikidata / MusicBrainz. IMSLP is authoritative but **classical-only**; pop/modern needs
+  MusicBrainz / Wikidata / LLM (fuzzier, since pop "composer" = songwriter).
 
 ---
 

@@ -38,6 +38,8 @@ _URL_RE = re.compile(r"https?://[^\s)>\]]+")
 _COMPILATION_RE = re.compile(
     r"\b(?:compilation|mix|playlist|best of|collection|hours|full album)\b"
 )
+# Whole-word cues for a reinterpreted / derivative version.
+_REMIX_RE = re.compile(r"\b(?:remix|remixed|rework|reimagined|bootleg)\b")
 # A video at/over this length is treated as a compilation. Tunable — the raw
 # duration is stored in metadata so the threshold can change without re-ingesting.
 COMPILATION_MIN_SECONDS = 15 * 60
@@ -80,6 +82,11 @@ def _is_compilation(title: str, duration_seconds: int | None) -> bool:
     if duration_seconds is not None and duration_seconds >= COMPILATION_MIN_SECONDS:
         return True
     return bool(_COMPILATION_RE.search(title.lower()))
+
+
+def _is_remix(title: str) -> bool:
+    """True for a reinterpreted / derivative version (remix, rework, bootleg, ...)."""
+    return bool(_REMIX_RE.search(title.lower()))
 
 
 def _extract_sheet_links(description: str) -> list[str]:
@@ -177,6 +184,7 @@ class YouTubeConnector(Connector):
                 "duration_seconds": duration_seconds,
                 "view_count": view_count,
                 "is_compilation": _is_compilation(title or "", duration_seconds),
+                "is_remix": _is_remix(title or ""),
                 "has_sheet_music_link": bool(links),
                 "sheet_music_links": links,
                 "description_excerpt": description[:500],

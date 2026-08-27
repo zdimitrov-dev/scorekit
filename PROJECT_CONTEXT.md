@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-22 · **Phase:** 0 complete → provisioning Supabase ·
+**Last updated:** 2026-08-27 · **Phase:** Supabase live; Phase 1 (YouTube) in progress ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -14,15 +14,18 @@
 | Area | State |
 |---|---|
 | Repo scaffold (Phase 0) | ✅ Done, committed, pushed to `main` |
-| Database schema (`db/schema.sql`) | ✅ Written & final for V1 — **not yet applied to a live DB** |
-| Supabase project | ⏳ **In progress** — being created; schema to be applied; `.env` to be filled |
-| Docker image build | ⛔ Not built/verified yet (planned Phase 0 smoke test) |
-| Source connectors | ⛔ Stubs only (raise `NotImplementedError`) |
+| Database schema (`db/schema.sql`) | ✅ Applied to live Supabase; RLS enabled on all tables |
+| Supabase project | ✅ Provisioned — schema applied, RLS on, `.env` filled & connection verified |
+| Docker image build | ⛔ Not built/verified yet |
+| Source connectors | 🟡 YouTube built + unit-tested (needs API key); IMSLP/MuseScore still stubs |
+| Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI / swipe / recommender | ⛔ Not started (Phases 4–6) |
 
-**The immediate next action:** finish provisioning Supabase, apply `db/schema.sql`,
-fill `.env`, then build the Docker image and run the ingest job as the Phase 0
-smoke test. After that, Phase 1 (YouTube connector) is the first real feature.
+**The immediate next action:** add a `YOUTUBE_API_KEY` to `.env` (Google Cloud →
+enable YouTube Data API v3 → API key), then run the ingest job live
+(`python -m scorekit.jobs.ingest --query "Clair de Lune"`) to confirm the first real
+end-to-end slice writes cards to Supabase. The connector, persistence, and unit tests
+already exist and pass; only the live API key is missing.
 
 ---
 
@@ -126,7 +129,7 @@ created_at, updated_at`
 - `composer/era/genre/difficulty` are content features and the basis for
   **cold-start** recommendations (a brand-new piece can be recommended immediately).
 - `difficulty` is nullable → the model must handle "unknown difficulty."
-- **Decision (2026-08-22): `difficulty` stays in the schema but is quarantined —
+- **Decision (2026-08-27): `difficulty` stays in the schema but is quarantined —
   nothing in the recommender may depend on it until we work out how to measure and use
   it properly.** Two reasons it needs care: (a) it is genuinely hard to measure, and
   (b) it is really a property of the *rendition*, not the piece — a simplified
@@ -340,7 +343,7 @@ requiring the data-hungry model to ship first. Four independent tools:
    of our own data, and a **closed beta** (piano community / dogfooding) to reach the
    hundreds-of-users range where collaborative filtering starts to bite.
 
-### External data: benchmarking + warm-start (decision, 2026-08-22)
+### External data: benchmarking + warm-start (decision, 2026-08-27)
 
 Two sanctioned roles for third-party listening data (e.g. MSD Taste Profile / Last.fm),
 both bounded so the *live, shipped* model still learns primarily from scorekit's own
@@ -375,8 +378,8 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Repo, Supabase schema, Docker skeleton | ✅ Scaffold done; Supabase provisioning in progress |
-| 1 | YouTube connector (first end-to-end slice) | ⛔ Next real feature |
+| 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
+| 1 | YouTube connector (first end-to-end slice) | 🟡 In progress — connector + persistence built & unit-tested; needs a live API key to run |
 | 2 | IMSLP connector | ⛔ Confirm IMSLP terms before building |
 | 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | ⛔ |
 | 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
@@ -394,23 +397,27 @@ the recommender.
 ## 8. Current state in detail (what works vs what's a stub)
 
 **Genuinely working:**
-- `db/schema.sql` — complete, idempotent, final for V1. *Not yet applied to a DB.*
+- `db/schema.sql` — complete, idempotent, final for V1. **Applied to the live Supabase project; RLS enabled on all four tables.**
 - `scorekit/normalize.py` — `normalize_slug()` implemented and unit-tested
   (`tests/test_normalize.py`). Verified: `("Clair de Lune","Debussy") → debussy-clair-de-lune`.
 - `scorekit/models.py` — `Card`, `Piece`, `Interaction` dataclasses (the shared schema).
 - `scorekit/jobs/ingest.py` — CLI runs end-to-end (`python -m scorekit.jobs.ingest
-  --query "..."`); iterates the connector registry and cleanly *skips* connectors
-  that raise `NotImplementedError`, logging which sources are pending.
-- `scorekit/config.py`, `scorekit/db.py` — real code; untested against a live
-  backend because none is provisioned yet.
+  --query "..."`); iterates the connector registry, skips connectors that are not built
+  or unconfigured (`NotImplementedError` / `ConnectorUnavailable`), and — unless
+  `--dry-run` — upserts the piece + cards into Supabase via `scorekit/store.py`.
+- `scorekit/connectors/youtube.py` — **implemented & unit-tested** (Phase 1): YouTube
+  Data API search → normalized `Card`s, with `kind` heuristics and sheet-music-link
+  capture in `metadata`. Needs a live `YOUTUBE_API_KEY` to hit the real API.
+- `scorekit/store.py` — **implemented & verified live**: upserts pieces (by `slug`) and
+  cards (dedup on `source,external_id`); unit-tested with a fake client.
+- `scorekit/config.py`, `scorekit/db.py` — real code, **verified against the live
+  Supabase backend** (connection + reads/writes confirmed).
 - `Dockerfile` / `docker-compose.yml` — structurally complete; **image not built yet.**
 
 **Stubbed / not started:**
-- All three connectors (`youtube.py`, `imslp.py`, `musescore.py`) — `.search()`
-  raises `NotImplementedError`. Zero API calls happen.
-- No persistence yet — `ingest()` collects `Card`s in memory and returns them; a
-  `# TODO(Phase 1+)` marks where the Supabase upsert goes.
-- No feed, UI, swipe logging, or recommender.
+- `imslp.py` and `musescore.py` connectors — `.search()` raises `NotImplementedError`
+  (Phases 2-3). Zero API calls happen for those.
+- No feed, UI, swipe logging, or recommender yet (Phases 4-6).
 
 ---
 

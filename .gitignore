@@ -26,3 +26,6 @@ htmlcov/
 Thumbs.db
 .idea/
 .vscode/
+
+# Local reference assets (kept local, not committed)
+recommendation-method.svg

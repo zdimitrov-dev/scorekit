@@ -67,7 +67,7 @@ docker compose run --rm ingest --query "Clair de Lune"
 |---|---|
 | 0 | Repo, Supabase schema (live, RLS on), Docker skeleton ✅ |
 | 1 | YouTube connector — search, enrich, persist ✅ |
-| 2 | IMSLP connector |
+| 2 | IMSLP connector — framework laid (gated pending terms) |
 | 3 | MuseScore via Google Custom Search |
 | 4 | Search feed UI (mixed-card masonry) |
 | 5 | Swipe interaction + logging |

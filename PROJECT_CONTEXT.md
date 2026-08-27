@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-27 · **Phase:** Supabase live; Phase 1 (YouTube) in progress ·
+**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) framework laid ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -17,14 +17,16 @@
 | Database schema (`db/schema.sql`) | ✅ Applied to live Supabase; RLS enabled on all tables |
 | Supabase project | ✅ Provisioned — schema applied, RLS on, `.env` filled & connection verified |
 | Docker image build | ⛔ Not built/verified yet |
-| Source connectors | 🟡 YouTube **live** (enrichment, compilation flag, `- Topic` filter); IMSLP/MuseScore still stubs |
+| Source connectors | 🟡 YouTube **live** (enrichment, compilation flag, `- Topic` filter); IMSLP **framework laid** (gated, inert until `IMSLP_ENABLED`); MuseScore stub |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI / swipe / recommender | ⛔ Not started (Phases 4–6) |
 
-**The immediate next action:** Phase 1 runs end-to-end live — the YouTube connector
-searches, enriches (`videos.list`), and upserts cards to Supabase. Next is either the
-IMSLP connector (Phase 2) or starting the feed UI (Phase 4). Open YouTube refinements:
-result pagination (>50), richer `kind` detection, and a stale-card reconcile step.
+**The immediate next action:** Phase 1 runs end-to-end live (YouTube search + enrich +
+persist). The IMSLP connector (Phase 2) is now scaffolded but **inert** — to activate it:
+confirm IMSLP's terms of use, set `IMSLP_ENABLED=1`, and verify the live search against
+IMSLP (only the pure parsing is unit-tested so far), then add per-page enrichment
+(license, PDF links, thumbnail). Alternatively start the feed UI (Phase 4). Open YouTube
+refinements: pagination (>50), richer `kind` detection, stale-card reconcile.
 
 ---
 
@@ -94,7 +96,7 @@ scorekit/
 │   │   ├── __init__.py     # Connector registry (CONNECTORS list, phase-ordered)
 │   │   ├── base.py         # Connector ABC (.source + .search) + ConnectorUnavailable
 │   │   ├── youtube.py      # Phase 1 — implemented, tested, live
-│   │   ├── imslp.py        # STUB (Phase 2)
+│   │   ├── imslp.py        # Phase 2 — framework (MediaWiki search + composer parse), gated by IMSLP_ENABLED
 │   │   └── musescore.py    # STUB (Phase 3)
 │   └── jobs/
 │       ├── __init__.py
@@ -102,7 +104,8 @@ scorekit/
 └── tests/
     ├── test_normalize.py   # slug normalizer
     ├── test_store.py       # persistence upserts (fake client)
-    └── test_youtube.py     # YouTube parsing/enrichment + connector
+    ├── test_youtube.py     # YouTube parsing/enrichment + connector
+    └── test_imslp.py       # IMSLP title/composer parsing + connector
 ```
 
 ---
@@ -384,7 +387,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 |---|---|---|
 | 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
 | 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
-| 2 | IMSLP connector | ⛔ Confirm IMSLP terms before building |
+| 2 | IMSLP connector | 🟡 Framework laid (MediaWiki search + composer parse, unit-tested), gated & inert until `IMSLP_ENABLED`; confirm IMSLP terms + verify live, then enrich |
 | 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | ⛔ |
 | 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
@@ -420,9 +423,16 @@ the recommender.
   Supabase backend** (connection + reads/writes confirmed).
 - `Dockerfile` / `docker-compose.yml` — structurally complete; **image not built yet.**
 
+**Framework laid, inert:**
+- `scorekit/connectors/imslp.py` — **Phase 2 framework, off by default.** MediaWiki
+  search + IMSLP `Title (Surname, Forename)` composer parsing → `score` cards; pure
+  logic unit-tested (`tests/test_imslp.py`). Gated by `IMSLP_ENABLED` (raises
+  `ConnectorUnavailable` until set), so the ingest job skips it. The live search path
+  is written to MediaWiki's contract but **not yet verified against IMSLP**; per-page
+  enrichment (license, PDF links, thumbnail) is TODO.
+
 **Stubbed / not started:**
-- `imslp.py` and `musescore.py` connectors — `.search()` raises `NotImplementedError`
-  (Phases 2-3). Zero API calls happen for those.
+- `musescore.py` connector — `.search()` raises `NotImplementedError` (Phase 3).
 - No feed, UI, swipe logging, or recommender yet (Phases 4-6).
 
 ---
@@ -456,6 +466,7 @@ docker compose run --rm ingest --query "Clair de Lune"
 | `SUPABASE_SERVICE_KEY` | Service-role key (**secret; bypasses RLS; never expose to frontend or commit**) | Supabase → Settings → API Keys → service_role |
 | `SUPABASE_DB_URL` | Direct Postgres URI (used to apply schema) | Supabase → Settings → Database → Connection string (URI) |
 | `YOUTUBE_API_KEY` | YouTube Data API (Phase 1) | Google Cloud console |
+| `IMSLP_ENABLED` | Enable the IMSLP connector (Phase 2); inert until set (`1`/`true`). Confirm IMSLP terms first | no key needed (public MediaWiki API) |
 | `GOOGLE_CSE_ID` / `GOOGLE_CSE_KEY` | MuseScore via Google Custom Search (Phase 3) | Google Programmable Search Engine |
 
 ---
@@ -498,7 +509,9 @@ docker compose run --rm ingest --query "Clair de Lune"
 - **Composer sourcing beyond the search query** — `composer` is currently caller-supplied
   (the `--composer` arg), never derived from YouTube. Future options: IMSLP / MuseScore /
   Wikidata / MusicBrainz. IMSLP is authoritative but **classical-only**; pop/modern needs
-  MusicBrainz / Wikidata / LLM (fuzzier, since pop "composer" = songwriter).
+  MusicBrainz / Wikidata / LLM (fuzzier, since pop "composer" = songwriter). *Partly
+  addressed:* the IMSLP connector now parses composer from the page title into
+  `card.author`; wiring that back to enrich `pieces.composer` during ingest is still open.
 
 ---
 

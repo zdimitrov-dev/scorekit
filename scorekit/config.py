@@ -16,6 +16,10 @@ class Settings:
     youtube_api_key: str = os.getenv("YOUTUBE_API_KEY", "")
     google_cse_id: str = os.getenv("GOOGLE_CSE_ID", "")
     google_cse_key: str = os.getenv("GOOGLE_CSE_KEY", "")
+    # IMSLP (Phase 2) is inert until enabled — confirm IMSLP's terms of use first.
+    imslp_enabled: bool = os.getenv("IMSLP_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 settings = Settings()

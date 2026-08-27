@@ -13,8 +13,10 @@ Two feed modes over one system:
 
 ## Status
 
-**Phase 0 — scaffolding.** Repo, Supabase schema, and Docker skeleton are in
-place. Connectors and feed are stubs. See the build plan below.
+**Phase 1 — YouTube connector live.** Supabase schema is applied (RLS on),
+ingestion persists pieces + cards, and the YouTube connector searches, enriches,
+and upserts results end-to-end. IMSLP/MuseScore connectors and the feed are next.
+See the build plan below.
 
 ## Architecture
 
@@ -63,8 +65,8 @@ docker compose run --rm ingest --query "Clair de Lune"
 
 | Phase | Scope |
 |---|---|
-| 0 | Repo, Supabase schema, Docker skeleton ✅ |
-| 1 | YouTube connector (first end-to-end slice) |
+| 0 | Repo, Supabase schema (live, RLS on), Docker skeleton ✅ |
+| 1 | YouTube connector — search, enrich, persist ✅ |
 | 2 | IMSLP connector |
 | 3 | MuseScore via Google Custom Search |
 | 4 | Search feed UI (mixed-card masonry) |

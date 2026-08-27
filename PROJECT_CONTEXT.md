@@ -73,6 +73,8 @@ interactions logged → (Phase 6) recommender ranks the home feed.`
 ```
 scorekit/
 ├── PROJECT_CONTEXT.md      # ← this file (start here)
+├── AGENTS.md               # agent guidance (read context first; commit locally, don't push)
+├── CLAUDE.md               # pointer to AGENTS.md for Claude Code
 ├── README.md               # public-facing overview, setup, phase plan
 ├── .env.example            # env var template (copy to .env, which is gitignored)
 ├── requirements.txt        # supabase, python-dotenv, httpx, tenacity,
@@ -80,24 +82,27 @@ scorekit/
 ├── Dockerfile              # python:3.13-slim; entrypoint = ingest job
 ├── docker-compose.yml      # `docker compose run --rm ingest --query "..."`
 ├── db/
-│   └── schema.sql          # full Postgres schema (idempotent). Apply to Supabase.
+│   └── schema.sql          # full Postgres schema + RLS (idempotent). Applied to Supabase.
 ├── scorekit/               # the Python package
 │   ├── __init__.py
 │   ├── config.py           # env-backed Settings (Supabase / YouTube / Google CSE)
 │   ├── db.py               # cached Supabase client (get_client())
 │   ├── models.py           # Card, Piece, Interaction dataclasses (shared schema)
 │   ├── normalize.py        # normalize_slug() — the cross-source dedupe key. TESTED.
+│   ├── store.py            # upsert_piece / upsert_cards → Supabase. TESTED.
 │   ├── connectors/
 │   │   ├── __init__.py     # Connector registry (CONNECTORS list, phase-ordered)
-│   │   ├── base.py         # Connector ABC: .source + .search(query, limit)
-│   │   ├── youtube.py      # STUB (Phase 1)
+│   │   ├── base.py         # Connector ABC (.source + .search) + ConnectorUnavailable
+│   │   ├── youtube.py      # Phase 1 — implemented, tested, live
 │   │   ├── imslp.py        # STUB (Phase 2)
 │   │   └── musescore.py    # STUB (Phase 3)
 │   └── jobs/
 │       ├── __init__.py
-│       └── ingest.py       # CLI orchestrator: runs connectors, collects Cards
+│       └── ingest.py       # CLI orchestrator: runs connectors → normalize → persist
 └── tests/
-    └── test_normalize.py   # unit tests for the slug normalizer
+    ├── test_normalize.py   # slug normalizer
+    ├── test_store.py       # persistence upserts (fake client)
+    └── test_youtube.py     # YouTube parsing/enrichment + connector
 ```
 
 ---

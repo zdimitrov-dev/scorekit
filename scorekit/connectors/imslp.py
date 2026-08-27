@@ -11,20 +11,22 @@ from the result title — IMSLP is an authoritative source for classical compose
 attribution, unlike the free-text YouTube path (see the "composer sourcing" open
 question in PROJECT_CONTEXT).
 
-Status: **framework, inert by default.** ``search()`` raises
-``ConnectorUnavailable`` until ``IMSLP_ENABLED`` is set, so the ingest job simply
-skips it — the same treatment as a not-yet-built connector. Enable it only after
-confirming IMSLP's current terms of use. When enabled, keep requests polite: a
-descriptive User-Agent and low volume (IMSLP is a donation-funded non-profit).
+Gated by ``IMSLP_ENABLED``: ``search()`` raises ``ConnectorUnavailable`` until it
+is set, so the ingest job skips it. Search is verified live against IMSLP; keep
+requests polite (descriptive User-Agent, low volume — IMSLP is a donation-funded
+non-profit).
 
-The parsing/normalization logic here is pure and unit-tested. Deliberately left
-for the implementation pass (see TODOs): fetching each work page for per-file
-license, direct PDF links, instrumentation, and a cover thumbnail. The live
-search path is written to MediaWiki's standard contract but has **not** been
-verified against IMSLP yet — do that when enabling.
+``enrich(card)`` is an optional second step: it fetches the card's work page and
+adds per-file license (Public Domain / Creative Commons), instrumentation, piece
+style, and year to ``card.metadata`` (one extra request per card). Disambiguation
+and redirect pages have no score template and are flagged rather than parsed — the
+famous Debussy "Clair de lune" is itself a disambiguation page that points at the
+Suite bergamasque page. Not yet extracted (IMSLP serves these through a hashed file
+system the API does not expose): direct PDF links and cover thumbnails.
 """
 from __future__ import annotations
 
+import logging
 import re
 from html import unescape
 from typing import Any
@@ -41,6 +43,8 @@ WIKI_BASE = "https://imslp.org/wiki/"
 # MediaWiki etiquette: identify the client. Points at the repo so IMSLP admins
 # can see who is calling if they ever need to.
 USER_AGENT = "scorekit/0.0 (+https://github.com/zdimitrov-dev/scorekit)"
+
+log = logging.getLogger("scorekit.imslp")
 
 # IMSLP work-page titles: "Work Title (Surname, Forename)".
 _TITLE_RE = re.compile(r"^(?P<title>.+?)\s*\((?P<last>[^,()]+),\s*(?P<first>[^()]+)\)\s*$")
@@ -71,6 +75,49 @@ def _work_url(page_title: str) -> str:
 def _strip_html(text: str) -> str:
     """Plain text from a MediaWiki search snippet (drops tags, unescapes entities)."""
     return unescape(_TAG_RE.sub("", text or "")).strip()
+
+
+def _wikitext_field(wt: str, name: str) -> str | None:
+    """Extract a single ``|Field=value`` value from an IMSLP page template."""
+    m = re.search(r"\|\s*" + re.escape(name) + r"\s*=\s*([^|\n}]*)", wt)
+    val = m.group(1).strip() if m else ""
+    return val or None
+
+
+def parse_workpage(wt: str) -> dict:
+    """Pull enrichment fields out of an IMSLP work page's wikitext.
+
+    Work pages are ``{{#fte:imslppage ...}}`` templates with per-file
+    ``|Copyright=`` values and a General Information block (Instrumentation, Piece
+    Style, ...). Disambiguation / redirect pages have no such template — those are
+    flagged instead of parsed (the famous Debussy "Clair de lune" is one: it points
+    at the Suite bergamasque page rather than holding scores itself).
+    """
+    out: dict = {"enriched": True}
+    if "#fte:imslppage" not in wt:
+        out["is_work_page"] = False
+        out["is_disambiguation"] = ("can refer to" in wt.lower()) or ("{{LinkWork" in wt)
+        return out
+
+    out["is_work_page"] = True
+    out["has_scores"] = "#fte:imslpfile" in wt   # score files use the imslpfile template
+    for key, field in (
+        ("instrumentation", "Instrumentation"),
+        ("piece_style", "Piece Style"),
+        ("year", "Year/Date of Composition"),
+        ("opus_catalogue", "Opus/Catalogue Number"),
+    ):
+        val = _wikitext_field(wt, field)
+        if val:
+            out[key] = val
+
+    licenses = sorted(
+        {m.strip() for m in re.findall(r"\|\s*Copyright\s*=\s*([^|\n}]+)", wt) if m.strip()}
+    )
+    if licenses:
+        out["licenses"] = licenses
+        out["is_public_domain"] = any(x.lower().startswith("public domain") for x in licenses)
+    return out
 
 
 class ImslpConnector(Connector):
@@ -136,7 +183,33 @@ class ImslpConnector(Connector):
                 "imslp_page_title": page_title,
                 "composer": composer,
                 "snippet": snippet,
-                # TODO(enrich): per-file license (many are Public Domain / CC),
-                # direct PDF download links, instrumentation, arranger.
             },
         )
+
+    def enrich(self, card: Card) -> Card:
+        """Fetch the card's work page and merge license / instrumentation / style /
+        year into ``card.metadata`` (one extra request). Best-effort and in-place:
+        on any failure the card is left as-is with ``metadata['enriched'] = False``.
+        """
+        if card.source != self.source:
+            return card
+        page = card.metadata.get("imslp_page_title") or card.title
+        try:
+            wt = self._fetch_wikitext(page)
+        except Exception as exc:            # network / missing page / bad payload
+            log.warning("[imslp] enrich failed for %r: %s", page, exc)
+            card.metadata["enriched"] = False
+            return card
+        card.metadata.update(parse_workpage(wt))
+        return card
+
+    def _fetch_wikitext(self, page_title: str) -> str:
+        resp = self.client.get(IMSLP_API, params={
+            "action": "parse",
+            "page": page_title,
+            "prop": "wikitext",
+            "redirects": 1,             # follow "Suite bergamasque" -> "..., CD 82"
+            "format": "json",
+        })
+        resp.raise_for_status()
+        return resp.json()["parse"]["wikitext"]["*"]

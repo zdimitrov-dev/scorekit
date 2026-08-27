@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) search live-verified ·
+**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) live + enriched; attribution filter in ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -17,17 +17,19 @@
 | Database schema (`db/schema.sql`) | ✅ Applied to live Supabase; RLS enabled on all tables |
 | Supabase project | ✅ Provisioned — schema applied, RLS on, `.env` filled & connection verified |
 | Docker image build | ⛔ Not built/verified yet |
-| Source connectors | 🟡 YouTube **live** (enrichment, compilation flag, `- Topic` filter); IMSLP **framework laid** (gated, inert until `IMSLP_ENABLED`); MuseScore stub |
+| Source connectors | 🟡 YouTube **live**; IMSLP **live** (search + work-page enrichment, gated by `IMSLP_ENABLED`); MuseScore stub |
+| Attribution + enrichment | ✅ Match-scoring filter (`scorekit/matching.py`) + IMSLP enrichment (license, instrumentation, style, year) |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI / swipe / recommender | ⛔ Not started (Phases 4–6) |
 
-**The immediate next action:** YouTube and IMSLP both return good results in a dry run
-(no writes). IMSLP search is now **live-verified** (HTTP 200 JSON; redirect pages
-filtered; composer parsed incl. unicode). Remaining IMSLP work: per-page **enrichment**
-(per-file license, PDF links, thumbnail) and a first real (non-dry-run) ingest to
-Supabase — plus confirming IMSLP's terms of use before production volume. Alternatively
-start the feed UI (Phase 4). Open YouTube refinements: pagination (>50), richer `kind`
-detection (dry run showed plain performances classify as `None`), stale-card reconcile.
+**The immediate next action:** the ingest pipeline is now `search → attribution
+match-filter → IMSLP enrichment → persist`, verified live in a dry run. IMSLP terms of
+use are **confirmed**. A real ingest with the new pipeline will refresh existing cards
+with `match_score` + enrichment metadata (upsert, no duplicates). Natural next steps:
+run that real ingest, or start the feed UI (Phase 4). Open refinements: YouTube `kind`
+via an LLM (see Open questions), the same-name/different-composition attribution residual,
+IMSLP disambiguation/movement resolution (the famous Debussy result is a disambig page —
+the real score is under *Suite bergamasque*), and IMSLP thumbnails/PDF links.
 
 ---
 
@@ -65,9 +67,11 @@ Piano learners face a two-part discovery gap no single tool covers:
   site (`personalweb` repo → https://github.com/zdimitrov-dev/personalweb).
 
 ### Pipeline shape
-`query → each Connector.search() → normalized Card objects → (Phase 1+) upsert
-piece (by slug) + cards into Supabase → feed renders cards → user swipes →
-interactions logged → (Phase 6) recommender ranks the home feed.`
+`query → each Connector.search() → normalized Card objects → attribution match-filter
+(score vs. the queried piece, drop clear non-matches) → IMSLP enrichment (work-page
+license/instrumentation/style) → upsert piece (by slug) + cards into Supabase → feed
+renders cards → user swipes → interactions logged → (Phase 6) recommender ranks the
+home feed.`
 
 ---
 
@@ -93,20 +97,22 @@ scorekit/
 │   ├── models.py           # Card, Piece, Interaction dataclasses (shared schema)
 │   ├── normalize.py        # normalize_slug() — the cross-source dedupe key. TESTED.
 │   ├── store.py            # upsert_piece / upsert_cards → Supabase. TESTED.
+│   ├── matching.py         # attribution match-scoring; drop clear non-matches. TESTED.
 │   ├── connectors/
 │   │   ├── __init__.py     # Connector registry (CONNECTORS list, phase-ordered)
 │   │   ├── base.py         # Connector ABC (.source + .search) + ConnectorUnavailable
 │   │   ├── youtube.py      # Phase 1 — implemented, tested, live
-│   │   ├── imslp.py        # Phase 2 — framework (MediaWiki search + composer parse), gated by IMSLP_ENABLED
+│   │   ├── imslp.py        # Phase 2 — search + work-page enrichment, gated by IMSLP_ENABLED
 │   │   └── musescore.py    # STUB (Phase 3)
 │   └── jobs/
 │       ├── __init__.py
-│       └── ingest.py       # CLI orchestrator: runs connectors → normalize → persist
+│       └── ingest.py       # CLI orchestrator: search → match-filter → enrich → persist
 └── tests/
     ├── test_normalize.py   # slug normalizer
     ├── test_store.py       # persistence upserts (fake client)
+    ├── test_matching.py    # attribution match-scoring + filter
     ├── test_youtube.py     # YouTube parsing/enrichment + connector
-    └── test_imslp.py       # IMSLP title/composer parsing + connector
+    └── test_imslp.py       # IMSLP parsing, enrichment, connector
 ```
 
 ---
@@ -388,7 +394,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 |---|---|---|
 | 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
 | 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
-| 2 | IMSLP connector | 🟡 Search live-verified (composer parse, redirect filter), gated by `IMSLP_ENABLED`; TODO: per-page enrichment + real ingest; confirm IMSLP terms before production |
+| 2 | IMSLP connector | ✅ Live + enriched (search, composer parse, redirect filter, work-page license/instrumentation/style), gated by `IMSLP_ENABLED` (terms confirmed). Open: disambig/movement resolution, thumbnails/PDF links |
 | 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | ⛔ |
 | 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
@@ -420,21 +426,32 @@ the recommender.
   and exclusion of auto-generated `- Topic` channels.
 - `scorekit/store.py` — **implemented & verified live**: upserts pieces (by `slug`) and
   cards (dedup on `source,external_id`); unit-tested with a fake client.
+- `scorekit/connectors/imslp.py` — **live & enriched (Phase 2), gated by `IMSLP_ENABLED`
+  (terms confirmed).** MediaWiki search → `score` cards with composer parsed from the
+  `Title (Surname, Forename)` convention (incl. unicode); redirect pages filtered; page
+  title is the `external_id` (IMSLP search omits `pageid`). `enrich(card)` fetches the
+  work page and adds per-file **license** (Public Domain / CC), **instrumentation**
+  (e.g. `piano` vs `Guitar` — usable to filter non-piano), **piece_style**, **year**,
+  and `has_scores` / `is_public_domain` / `is_disambiguation` flags. Unit-tested.
+- `scorekit/matching.py` — **attribution match-scoring** (`tests/test_matching.py`).
+  Scores each card against the queried piece (title phrase/overlap + composer boost),
+  stores `metadata['match_score']`, and drops only clear non-matches (`DROP_THRESHOLD`,
+  lenient — lesser/related works survive at a lower score). Runs before enrichment.
 - `scorekit/config.py`, `scorekit/db.py` — real code, **verified against the live
   Supabase backend** (connection + reads/writes confirmed).
 - `Dockerfile` / `docker-compose.yml` — structurally complete; **image not built yet.**
 
-**Framework laid (search live-verified), gated by `IMSLP_ENABLED`:**
-- `scorekit/connectors/imslp.py` — MediaWiki search + IMSLP `Title (Surname, Forename)`
-  composer parsing → `score` cards; unit-tested (`tests/test_imslp.py`). Gated by
-  `IMSLP_ENABLED` (raises `ConnectorUnavailable` until set). **Verified live against
-  IMSLP (HTTP 200 JSON):** composer parsing works incl. unicode; **redirect pages are
-  filtered out**; IMSLP's search omits `pageid`, so the canonical page title is the
-  `external_id`. Per-page enrichment (per-file license, direct PDF links, thumbnail)
-  and a first real ingest to Supabase are still TODO.
+**Known structural finding (IMSLP):** many search hits are **disambiguation pages**,
+**redirects**, or movements living under a **parent work** — e.g. the famous Debussy
+"Clair de lune" result is a disambiguation page; the real score is under *Suite
+bergamasque, CD 82*. So the current IMSLP path does not always reach the actual score
+page for a movement. Enrichment flags disambiguation pages (`is_work_page=False`);
+resolving disambig/movements to the real score page is an open refinement.
 
 **Stubbed / not started:**
 - `musescore.py` connector — `.search()` raises `NotImplementedError` (Phase 3).
+- IMSLP thumbnails & direct PDF links — served via IMSLP's hashed file system, not
+  exposed by the API; deferred.
 - No feed, UI, swipe logging, or recommender yet (Phases 4-6).
 
 ---
@@ -494,7 +511,20 @@ docker compose run --rm ingest --query "Clair de Lune"
   `auth.users` when auth is added.
 - **Scheduling** — ingestion is a CLI job today; the "scheduled jobs" story
   (cron/Supabase scheduled functions/etc.) is not yet built.
-- **IMSLP terms** — confirm current access terms before building the Phase 2 connector.
+- **IMSLP terms** — ✅ confirmed; the connector is enabled (`IMSLP_ENABLED=1`).
+- **YouTube `kind` via LLM** — the title heuristic misses plain performances/covers
+  (many classify as `None`). Plan: classify with an LLM (a school-provided ChatGPT 5.5
+  API key). Batch ~50–100 cards per call, each tagged with its card id, requiring a JSON
+  array keyed by id back (so responses can't drift out of order); run as an offline async
+  backfill (or the provider's Batch API). Not built yet.
+- **Attribution residual** — `matching.py` cannot separate a piano cover of a piece from
+  a *different* composition that shares the exact title (e.g. the Flight Facilities pop
+  song "Clair de Lune"); both keep a high `match_score`. Conversely a real rendition
+  titled by its parent work ("Suite bergamasque … Clair de lune") can score low.
+  Separating these needs audio/semantic signal — future work.
+- **IMSLP disambiguation / movement resolution** — search returns disambig pages and
+  redirects, and movements live under parent works, so the real score page for a movement
+  isn't always reached. Following disambig/redirect links to the true work page is open.
 - **Recommender evaluation metric** — how exactly to score "is it recommending well"
   (precision@k / NDCG / AUC / …) is not yet decided. See §6 → Evaluation & data
   bootstrapping.

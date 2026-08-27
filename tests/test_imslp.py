@@ -9,7 +9,9 @@ from scorekit.connectors.imslp import (
     _parse_title,
     _strip_html,
     _work_url,
+    parse_workpage,
 )
+from scorekit.models import Card
 
 
 # --- a minimal stand-in for httpx.Client.get(...).json() ---------------------
@@ -108,3 +110,80 @@ def test_disabled_raises_connector_unavailable(monkeypatch):
     monkeypatch.setattr(imslp, "settings", SimpleNamespace(imslp_enabled=False))
     with pytest.raises(ConnectorUnavailable):
         ImslpConnector(client=_FakeClient(SEARCH_PAYLOAD)).search("anything")
+
+
+# --- enrichment ---------------------------------------------------------------
+WORKPAGE_WT = """{{#fte:imslppage
+| *****SCORES***** =
+{{#fte:imslpfile
+|Copyright=Public Domain
+}}
+{{#fte:imslpfile
+|Copyright=Creative Commons Attribution 4.0
+}}
+| *****GENERAL***** =
+|Work Title=Suite bergamasque
+|Opus/Catalogue Number=CD 82 ; L.75
+|Year/Date of Composition=1890-1905
+|Instrumentation=piano
+|Piece Style=Romantic
+}}"""
+
+DISAMBIG_WT = (
+    "This title can refer to three works.\n"
+    "*{{LinkWorkN|Suite bergamasque|CD 82|Debussy|Claude|0}}\n"
+    "[[Category:Debussy, Claude]]"
+)
+
+
+def test_parse_workpage_extracts_fields():
+    md = parse_workpage(WORKPAGE_WT)
+    assert md["is_work_page"] is True
+    assert md["has_scores"] is True
+    assert md["instrumentation"] == "piano"
+    assert md["piece_style"] == "Romantic"
+    assert md["year"] == "1890-1905"
+    assert md["opus_catalogue"] == "CD 82 ; L.75"
+    assert md["is_public_domain"] is True
+    assert "Public Domain" in md["licenses"]
+    assert "Creative Commons Attribution 4.0" in md["licenses"]
+
+
+def test_parse_workpage_disambiguation():
+    md = parse_workpage(DISAMBIG_WT)
+    assert md["is_work_page"] is False
+    assert md["is_disambiguation"] is True
+    assert "instrumentation" not in md
+
+
+def test_enrich_merges_metadata():
+    parse_payload = {"parse": {"wikitext": {"*": WORKPAGE_WT}}}
+    conn = ImslpConnector(client=_FakeClient(parse_payload))
+    card = Card(source="imslp", external_id="Suite bergamasque, CD 82 (Debussy, Claude)",
+                url="u", title="Suite bergamasque", kind="score",
+                metadata={"imslp_page_title": "Suite bergamasque (Debussy, Claude)"})
+    out = conn.enrich(card)
+    assert out.metadata["instrumentation"] == "piano"
+    assert out.metadata["is_public_domain"] is True
+    assert out.metadata["enriched"] is True
+
+
+def test_enrich_handles_failure_gracefully():
+    class _BoomClient:
+        def get(self, *a, **k):
+            raise RuntimeError("network down")
+
+    card = Card(source="imslp", external_id="x", url="u", title="X",
+                metadata={"imslp_page_title": "X"})
+    out = ImslpConnector(client=_BoomClient()).enrich(card)
+    assert out.metadata["enriched"] is False
+
+
+def test_enrich_skips_non_imslp_cards():
+    card = Card(source="youtube", external_id="v", url="u", title="V", metadata={})
+    # no client call should happen; a Boom client would raise if it did
+    class _BoomClient:
+        def get(self, *a, **k):
+            raise AssertionError("should not fetch for non-imslp card")
+    out = ImslpConnector(client=_BoomClient()).enrich(card)
+    assert out is card

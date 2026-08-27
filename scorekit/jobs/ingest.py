@@ -17,6 +17,7 @@ import logging
 
 from ..connectors import CONNECTORS
 from ..connectors.base import ConnectorUnavailable
+from ..matching import annotate_and_filter
 from ..models import Card, Piece
 from ..normalize import normalize_slug
 from ..store import upsert_cards, upsert_piece
@@ -25,13 +26,15 @@ log = logging.getLogger("scorekit.ingest")
 
 
 def ingest(query: str, composer: str | None = None, limit: int = 20,
-           store: bool = True) -> list[Card]:
+           store: bool = True, enrich: bool = True) -> list[Card]:
     slug = normalize_slug(query, composer)
     log.info("Ingesting query=%r composer=%r -> slug=%r", query, composer, slug)
 
     cards: list[Card] = []
+    connectors: dict = {}
     for connector_cls in CONNECTORS:
         connector = connector_cls()
+        connectors[connector.source] = connector
         try:
             found = connector.search(query, limit=limit)
         except (NotImplementedError, ConnectorUnavailable) as exc:
@@ -39,6 +42,23 @@ def ingest(query: str, composer: str | None = None, limit: int = 20,
             continue
         log.info("[%s] returned %d card(s)", connector.source, len(found))
         cards.extend(found)
+
+    # Attribution: score each card against the queried piece and drop clear
+    # non-matches. Lesser/related works survive at a lower match_score (stored in
+    # metadata) rather than being excluded. Runs before enrichment so we never
+    # spend extra IMSLP requests enriching off-target pages.
+    cards, dropped = annotate_and_filter(cards, query, composer)
+    if dropped:
+        log.info("attribution: dropped %d off-target card(s); %d kept", dropped, len(cards))
+
+    # Enrichment: fetch IMSLP work-page details (license, instrumentation, style).
+    imslp = connectors.get("imslp")
+    if enrich and imslp is not None:
+        to_enrich = [c for c in cards if c.source == "imslp"]
+        if to_enrich:
+            log.info("enriching %d IMSLP card(s)...", len(to_enrich))
+            for c in to_enrich:
+                imslp.enrich(c)
 
     if store:
         if cards:
@@ -57,6 +77,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--dry-run", action="store_true",
                         help="Collect and report only; do not write to Supabase.")
+    parser.add_argument("--no-enrich", action="store_true",
+                        help="Skip IMSLP per-page enrichment (fewer requests).")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
@@ -65,7 +87,7 @@ def main() -> None:
         format="%(levelname)s %(name)s: %(message)s",
     )
     cards = ingest(args.query, composer=args.composer, limit=args.limit,
-                   store=not args.dry_run)
+                   store=not args.dry_run, enrich=not args.no_enrich)
     log.info("Done. %d card(s) collected.", len(cards))
 
 

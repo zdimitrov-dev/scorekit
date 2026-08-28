@@ -152,8 +152,16 @@ class MuseScoreConnector(Connector):
             "siteSearchFilter": "i",
             "num": num,
         })
-        if getattr(resp, "status_code", 200) == 429:
+        status = getattr(resp, "status_code", 200)
+        if status == 429:
             raise ConnectorUnavailable("Google Custom Search quota exceeded (HTTP 429).")
+        if status in (401, 403):
+            # Bad/misconfigured key, or the project's Custom Search API isn't
+            # provisioned yet. Treat as unavailable (skip) rather than crashing ingest.
+            raise ConnectorUnavailable(
+                f"Google Custom Search access denied (HTTP {status}) — check GOOGLE_CSE_KEY, "
+                "that its project has the Custom Search API enabled, and any key restrictions."
+            )
         resp.raise_for_status()
         return resp.json()
 

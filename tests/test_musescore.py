@@ -124,6 +124,16 @@ def test_quota_exceeded_raises(monkeypatch):
         conn.search("x")
 
 
+@pytest.mark.parametrize("status", [401, 403])
+def test_auth_error_is_skipped_not_crash(monkeypatch, status):
+    # a bad key / not-yet-provisioned project must skip (ConnectorUnavailable),
+    # never crash the whole ingest run
+    monkeypatch.setattr(musescore, "settings", CFG)
+    conn = MuseScoreConnector(client=_FakeClient({}, status=status), cache=_DictCache())
+    with pytest.raises(ConnectorUnavailable):
+        conn.search("x")
+
+
 def test_no_items_returns_empty(monkeypatch):
     monkeypatch.setattr(musescore, "settings", CFG)
     conn = MuseScoreConnector(client=_FakeClient({}), cache=_DictCache())

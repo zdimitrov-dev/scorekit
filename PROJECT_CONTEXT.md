@@ -439,7 +439,8 @@ the recommender.
   title is the `external_id` (IMSLP search omits `pageid`). `enrich(card)` fetches the
   work page and adds per-file **license** (Public Domain / CC), **instrumentation**
   (e.g. `piano` vs `Guitar` — usable to filter non-piano), **piece_style**, **year**,
-  and `has_scores` / `is_public_domain` / `is_disambiguation` flags. `enrich_cards(cards)`
+  the **first-page score thumbnail** (resolved via the `imageinfo` API when the work page
+  has one), and `has_scores` / `is_public_domain` / `is_disambiguation` flags. `enrich_cards(cards)`
   additionally **resolves disambiguation pages** into the real work-page cards they point
   to (parses `LinkWork` templates — the ingest pipeline calls this). Unit-tested.
 - `scorekit/matching.py` — **attribution match-scoring** (`tests/test_matching.py`).
@@ -465,9 +466,14 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
 - `scorekit/connectors/musescore.py` — **Phase 3 framework.** Google Custom Search JSON
   API restricted to musescore.com → `kind="listing"` cards with preview thumbnails. Gated
   by `GOOGLE_CSE_ID`/`GOOGLE_CSE_KEY` (raises `ConnectorUnavailable` until set). Per-query
-  TTL **file cache** protects the 100/day CSE quota; HTTP 429 → skip. Unit-tested
-  (`tests/test_musescore.py`); **not yet verified live**. Deferred: >10-result pagination,
-  instrumentation/arranger parsing, DB-backed cache (the file cache is single-machine).
+  TTL **file cache** protects the 100/day CSE quota; **401/403/429 → skip** (don't crash
+  the run). Unit-tested (`tests/test_musescore.py`). **Live blocked (Google-side):** keys
+  are set but the API returns 403 "project does not have access to Custom Search JSON API"
+  — a provisioning lag on the newly-enabled API (config verified correct: enabled in the
+  key's project, key restricted to Custom Search API, quota counting requests). Service
+  accounts are **not** supported for this API (API-key only), so that's not an alternative;
+  it should start working once Google finishes provisioning. Deferred: >10-result
+  pagination, instrumentation/arranger parsing, DB-backed cache (file cache is single-machine).
 
 **Stubbed / not started:**
 - IMSLP thumbnails & direct PDF links — served via IMSLP's hashed file system, not
@@ -478,10 +484,14 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
 - Next.js (App Router) + Tailwind v4 + framer-motion + lucide, in `scorekit/web/`.
   Reads Supabase **server-side** with the service key (no secret in the browser);
   `web/.env.local` holds `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` (gitignored).
-- Masonry board (`columns-2 md:3 xl:4`), hover-darken titles, source/duration badges,
-  gradient placeholder tiles for score cards (IMSLP has no thumbnail). 24 then "Load more".
-- Fixed bottom nav (Home / Search / Settings — settings is a stub). Search filters the
-  already-loaded cards. Ordering: relevance (`match_score`) then `view_count`.
+- Masonry board (`columns-2 md:3 xl:4`), hover-darken titles, source/duration badges.
+  IMSLP cards show the **real first-page score thumbnail** when resolved, else a themed
+  score tile (composer, title, and stat chips: instrumentation / style / year / PD).
+  24 then "Load more".
+- Fixed **top bar** (wordmark left, profile menu right — the menu holds Sign-in stub,
+  Your profile, Saved, Settings) and fixed **bottom nav** (Home / Search / Saved). Pages:
+  `/` feed, `/search` (filters loaded cards), `/favorites` (liked+saved from localStorage),
+  `/profile` (scaffold), `/settings` (stub). Ordering: relevance (`match_score`) then `view_count`.
 - Click-to-expand modal via framer-motion shared `layoutId`: the card morphs to cover
   most of the page (content left, info right — title link, sheet link, badges, placeholder
   comments, Like/Save via localStorage), and the X animates it back.

@@ -24,8 +24,9 @@ style, and year to ``card.metadata`` (one extra request per card).
 disambiguation pages**: a signpost page like the Debussy "Clair de lune" (which
 holds no scores — it points at Suite bergamasque and two songs) is replaced by the
 real work-page cards it links to, each keeping the searched-piece title but pointing
-at the actual score page. Not yet extracted (IMSLP serves these through a hashed file
-system the API does not expose): direct PDF links and cover thumbnails.
+at the actual score page. First-page score thumbnails are resolved via the MediaWiki
+``imageinfo`` API when a work page has one. Not yet extracted: direct PDF download
+links (IMSLP serves those through a disclaimer-gated hashed file system).
 """
 from __future__ import annotations
 
@@ -112,6 +113,18 @@ def _wikitext_field(wt: str, name: str) -> str | None:
     return val or None
 
 
+def _first_score_thumb(wt: str) -> str | None:
+    """The ``Thumb Filename`` of the first score file (``#fte:imslpfile`` block) —
+    a first-page preview of the sheet music. Ignores audio blocks, whose thumbs are
+    often stale/reused."""
+    for block in wt.split("{{#fte:")[1:]:
+        if block.startswith("imslpfile"):
+            m = re.search(r"\|\s*Thumb Filename\s*=\s*([^|\n}]+)", block)
+            if m and m.group(1).strip():
+                return m.group(1).strip()
+    return None
+
+
 def parse_workpage(wt: str) -> dict:
     """Pull enrichment fields out of an IMSLP work page's wikitext.
 
@@ -132,6 +145,9 @@ def parse_workpage(wt: str) -> dict:
 
     out["is_work_page"] = True
     out["has_scores"] = "#fte:imslpfile" in wt   # score files use the imslpfile template
+    thumb = _first_score_thumb(wt)
+    if thumb:
+        out["thumb_filename"] = thumb
     for key, field in (
         ("instrumentation", "Instrumentation"),
         ("piece_style", "Piece Style"),
@@ -232,7 +248,32 @@ class ImslpConnector(Connector):
             card.metadata["enriched"] = False
             return card
         card.metadata.update(parse_workpage(wt))
+        # Resolve a real first-page score thumbnail if the page has one.
+        thumb = card.metadata.get("thumb_filename")
+        if thumb and not card.thumbnail_url:
+            card.thumbnail_url = self._resolve_thumbnail(thumb)
         return card
+
+    def _resolve_thumbnail(self, filename: str) -> str | None:
+        """Resolve an IMSLP ``File:`` thumbnail name to its image URL via imageinfo."""
+        try:
+            resp = self.client.get(IMSLP_API, params={
+                "action": "query",
+                "titles": f"File:{filename}",
+                "prop": "imageinfo",
+                "iiprop": "url",
+                "format": "json",
+            })
+            resp.raise_for_status()
+            pages = resp.json().get("query", {}).get("pages", {})
+            page = next(iter(pages.values()), {})
+            url = (page.get("imageinfo") or [{}])[0].get("url")
+            if url and url.startswith("//"):   # IMSLP returns protocol-relative URLs
+                url = "https:" + url
+            return url
+        except Exception as exc:
+            log.warning("[imslp] thumbnail resolve failed for %r: %s", filename, exc)
+            return None
 
     def _fetch_wikitext(self, page_title: str) -> str:
         resp = self.client.get(IMSLP_API, params={

@@ -7,6 +7,7 @@ from scorekit.connectors.base import ConnectorUnavailable
 from scorekit.connectors.imslp import (
     ImslpConnector,
     _disambiguation_targets,
+    _first_score_thumb,
     _parse_title,
     _strip_html,
     _work_url,
@@ -118,6 +119,7 @@ WORKPAGE_WT = """{{#fte:imslppage
 | *****SCORES***** =
 {{#fte:imslpfile
 |Copyright=Public Domain
+|Thumb Filename=TN-PMLP2397-suite.jpg
 }}
 {{#fte:imslpfile
 |Copyright=Creative Commons Attribution 4.0
@@ -148,6 +150,15 @@ def test_parse_workpage_extracts_fields():
     assert md["is_public_domain"] is True
     assert "Public Domain" in md["licenses"]
     assert "Creative Commons Attribution 4.0" in md["licenses"]
+    assert md["thumb_filename"] == "TN-PMLP2397-suite.jpg"
+
+
+def test_first_score_thumb_ignores_audio_blocks():
+    wt = (
+        "{{#fte:imslpaudio\n|Thumb Filename=TN-audio-stale.png\n}}\n"
+        "{{#fte:imslpfile\n|Thumb Filename=TN-score-firstpage.jpg\n}}"
+    )
+    assert _first_score_thumb(wt) == "TN-score-firstpage.jpg"
 
 
 def test_parse_workpage_disambiguation():

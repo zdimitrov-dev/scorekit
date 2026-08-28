@@ -490,8 +490,12 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
   24 then "Load more".
 - Fixed **top bar** (wordmark left, profile menu right — the menu holds Sign-in stub,
   Your profile, Saved, Settings) and fixed **bottom nav** (Home / Search / Saved). Pages:
-  `/` feed, `/search` (filters loaded cards), `/favorites` (liked+saved from localStorage),
-  `/profile` (scaffold), `/settings` (stub). Ordering: relevance (`match_score`) then `view_count`.
+  `/` = the **home / recommendation feed** (mixed board of everything, stand-in for the
+  Phase 6 recommender); `/search` filters loaded cards and **separates YouTube (the
+  centerpiece masonry board) from a slide-out one-column *scores* drawer** (IMSLP +
+  MuseScore, framer-motion, in-page, own scroll, pushes the board left on large screens);
+  `/favorites` (liked+saved from localStorage), `/profile` (scaffold), `/settings` (stub).
+  Ordering: relevance (`match_score`) then `view_count`.
 - Click-to-expand modal via framer-motion shared `layoutId`: the card morphs to cover
   most of the page (content left, info right — title link, sheet link, badges, placeholder
   comments, Like/Save via localStorage), and the X animates it back.

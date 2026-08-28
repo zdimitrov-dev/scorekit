@@ -1,0 +1,8 @@
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  // Don't auto-generate AGENTS.md/CLAUDE.md in web/ — the repo-root ones are authoritative.
+  agentRules: false,
+};
+
+export default nextConfig;

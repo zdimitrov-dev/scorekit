@@ -6,6 +6,7 @@ from scorekit.connectors import imslp
 from scorekit.connectors.base import ConnectorUnavailable
 from scorekit.connectors.imslp import (
     ImslpConnector,
+    _disambiguation_targets,
     _parse_title,
     _strip_html,
     _work_url,
@@ -153,7 +154,20 @@ def test_parse_workpage_disambiguation():
     md = parse_workpage(DISAMBIG_WT)
     assert md["is_work_page"] is False
     assert md["is_disambiguation"] is True
+    assert md["disambiguation_targets"] == ["Suite bergamasque, CD 82 (Debussy, Claude)"]
     assert "instrumentation" not in md
+
+
+def test_disambiguation_targets_parsing():
+    wt = (
+        "{{LinkWorkN|Suite bergamasque|CD 82|Debussy|Claude|0}}\n"
+        "{{LinkWork|Fêtes galantes||Debussy|Claude|0}}\n"
+        "{{LinkName|Paul|Verlaine}}"          # a person link — must be ignored
+    )
+    assert _disambiguation_targets(wt) == [
+        "Suite bergamasque, CD 82 (Debussy, Claude)",   # LinkWorkN -> with catalogue
+        "Fêtes galantes (Debussy, Claude)",             # LinkWork, empty cat -> no catalogue
+    ]
 
 
 def test_enrich_merges_metadata():
@@ -187,3 +201,54 @@ def test_enrich_skips_non_imslp_cards():
             raise AssertionError("should not fetch for non-imslp card")
     out = ImslpConnector(client=_BoomClient()).enrich(card)
     assert out is card
+
+
+# --- disambiguation resolution (Option A) -------------------------------------
+class _RoutingClient:
+    """Fake httpx client returning different wikitext per requested page."""
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.fetched = []
+
+    def get(self, url, params=None):
+        page = (params or {}).get("page")
+        self.fetched.append(page)
+        return _FakeResp({"parse": {"wikitext": {"*": self.pages.get(page, "")}}})
+
+
+def test_enrich_cards_resolves_disambiguation():
+    pages = {
+        "Clair de lune (Debussy, Claude)": DISAMBIG_WT,             # -> Suite bergamasque
+        "Suite bergamasque, CD 82 (Debussy, Claude)": WORKPAGE_WT,
+    }
+    conn = ImslpConnector(client=_RoutingClient(pages))
+    disambig = Card(source="imslp", external_id="Clair de lune (Debussy, Claude)",
+                    url="u", title="Clair de lune", kind="score", author="Claude Debussy",
+                    metadata={"imslp_page_title": "Clair de lune (Debussy, Claude)",
+                              "match_score": 1.0})
+    out = conn.enrich_cards([disambig])
+
+    # the dud disambig card is replaced by the real work page
+    assert len(out) == 1
+    card = out[0]
+    assert card.title == "Clair de lune"                                     # keeps searched name
+    assert card.external_id == "Suite bergamasque, CD 82 (Debussy, Claude)"  # real page
+    assert card.metadata["parent_work"] == "Suite bergamasque, CD 82"
+    assert card.metadata["resolved_from_disambiguation"] == "Clair de lune (Debussy, Claude)"
+    assert card.metadata["match_score"] == 1.0                               # carried over
+    assert card.metadata["instrumentation"] == "piano"                       # enriched from real page
+    assert card.metadata["is_public_domain"] is True
+
+
+def test_enrich_cards_passes_through_and_enriches_work_pages():
+    pages = {"Au Clair de la Lune, Op.41 (Vītols, Jāzeps)": WORKPAGE_WT}
+    conn = ImslpConnector(client=_RoutingClient(pages))
+    work = Card(source="imslp", external_id="Au Clair de la Lune, Op.41 (Vītols, Jāzeps)",
+                url="u", title="Au Clair de la Lune, Op.41", kind="score",
+                metadata={"imslp_page_title": "Au Clair de la Lune, Op.41 (Vītols, Jāzeps)"})
+    yt = Card(source="youtube", external_id="v", url="u", title="V", metadata={})
+    out = conn.enrich_cards([work, yt])
+    assert len(out) == 2
+    assert out[0].metadata["instrumentation"] == "piano"   # real work page enriched
+    assert out[1] is yt                                    # non-imslp untouched

@@ -51,14 +51,14 @@ def ingest(query: str, composer: str | None = None, limit: int = 20,
     if dropped:
         log.info("attribution: dropped %d off-target card(s); %d kept", dropped, len(cards))
 
-    # Enrichment: fetch IMSLP work-page details (license, instrumentation, style).
+    # Enrichment: fetch IMSLP work-page details (license, instrumentation, style)
+    # and resolve disambiguation pages into the real work-page cards they point to.
     imslp = connectors.get("imslp")
     if enrich and imslp is not None:
-        to_enrich = [c for c in cards if c.source == "imslp"]
-        if to_enrich:
-            log.info("enriching %d IMSLP card(s)...", len(to_enrich))
-            for c in to_enrich:
-                imslp.enrich(c)
+        n = sum(1 for c in cards if c.source == "imslp")
+        if n:
+            log.info("enriching %d IMSLP card(s)...", n)
+            cards = imslp.enrich_cards(cards)
 
     if store:
         if cards:

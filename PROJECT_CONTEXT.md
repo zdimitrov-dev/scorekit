@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) live + enriched; attribution filter in ·
+**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) live, enriched, disambiguation-resolved; attribution filter in ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -23,13 +23,13 @@
 | Feed UI / swipe / recommender | ⛔ Not started (Phases 4–6) |
 
 **The immediate next action:** the ingest pipeline is now `search → attribution
-match-filter → IMSLP enrichment → persist`, verified live in a dry run. IMSLP terms of
-use are **confirmed**. A real ingest with the new pipeline will refresh existing cards
-with `match_score` + enrichment metadata (upsert, no duplicates). Natural next steps:
-run that real ingest, or start the feed UI (Phase 4). Open refinements: YouTube `kind`
-via an LLM (see Open questions), the same-name/different-composition attribution residual,
-IMSLP disambiguation/movement resolution (the famous Debussy result is a disambig page —
-the real score is under *Suite bergamasque*), and IMSLP thumbnails/PDF links.
+match-filter → IMSLP enrichment (+ disambiguation resolution) → persist`, verified live
+in a dry run. IMSLP terms confirmed. A real ingest with the new pipeline refreshes
+existing cards (upsert, no duplicates) with `match_score`, enrichment, and resolved
+disambiguation pages. Natural next steps: run that real ingest, or start the feed UI
+(Phase 4). Open refinements: YouTube `kind` via an LLM (see Open questions), the
+same-name/different-composition attribution residual, per-movement labeling (a resolved
+movement lands on its parent-work page), and IMSLP thumbnails/PDF links.
 
 ---
 
@@ -68,8 +68,9 @@ Piano learners face a two-part discovery gap no single tool covers:
 
 ### Pipeline shape
 `query → each Connector.search() → normalized Card objects → attribution match-filter
-(score vs. the queried piece, drop clear non-matches) → IMSLP enrichment (work-page
-license/instrumentation/style) → upsert piece (by slug) + cards into Supabase → feed
+(score vs. the queried piece, drop clear non-matches) → IMSLP enrichment + disambiguation
+resolution (work-page license/instrumentation/style; signpost pages → real score pages)
+→ upsert piece (by slug) + cards into Supabase → feed
 renders cards → user swipes → interactions logged → (Phase 6) recommender ranks the
 home feed.`
 
@@ -394,7 +395,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 |---|---|---|
 | 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
 | 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
-| 2 | IMSLP connector | ✅ Live + enriched (search, composer parse, redirect filter, work-page license/instrumentation/style), gated by `IMSLP_ENABLED` (terms confirmed). Open: disambig/movement resolution, thumbnails/PDF links |
+| 2 | IMSLP connector | ✅ Live + enriched + **disambiguation resolution** (Option A), gated by `IMSLP_ENABLED` (terms confirmed). Open: per-movement labeling, thumbnails/PDF links |
 | 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | ⛔ |
 | 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
@@ -432,7 +433,9 @@ the recommender.
   title is the `external_id` (IMSLP search omits `pageid`). `enrich(card)` fetches the
   work page and adds per-file **license** (Public Domain / CC), **instrumentation**
   (e.g. `piano` vs `Guitar` — usable to filter non-piano), **piece_style**, **year**,
-  and `has_scores` / `is_public_domain` / `is_disambiguation` flags. Unit-tested.
+  and `has_scores` / `is_public_domain` / `is_disambiguation` flags. `enrich_cards(cards)`
+  additionally **resolves disambiguation pages** into the real work-page cards they point
+  to (parses `LinkWork` templates — the ingest pipeline calls this). Unit-tested.
 - `scorekit/matching.py` — **attribution match-scoring** (`tests/test_matching.py`).
   Scores each card against the queried piece (title phrase/overlap + composer boost),
   stores `metadata['match_score']`, and drops only clear non-matches (`DROP_THRESHOLD`,
@@ -441,12 +444,16 @@ the recommender.
   Supabase backend** (connection + reads/writes confirmed).
 - `Dockerfile` / `docker-compose.yml` — structurally complete; **image not built yet.**
 
-**Known structural finding (IMSLP):** many search hits are **disambiguation pages**,
-**redirects**, or movements living under a **parent work** — e.g. the famous Debussy
-"Clair de lune" result is a disambiguation page; the real score is under *Suite
-bergamasque, CD 82*. So the current IMSLP path does not always reach the actual score
-page for a movement. Enrichment flags disambiguation pages (`is_work_page=False`);
-resolving disambig/movements to the real score page is an open refinement.
+**IMSLP disambiguation resolution (done — Option A):** many search hits are
+**disambiguation pages** (signposts with no scores) or **redirects** — e.g. the famous
+Debussy "Clair de lune" result is a disambiguation page pointing at *Suite bergamasque,
+CD 82* plus two song settings. `enrich_cards()` **resolves** these: it parses the page's
+`LinkWork`/`LinkWorkN` templates and replaces the dud card with the real work-page cards
+(each keeps the searched title, links to the actual score page, and carries its own
+enrichment). Verified live: Debussy "Clair de lune" → the Suite bergamasque piano score
+(`instrumentation='piano'`) + the two song settings (`voice, piano`). Remaining nicety:
+a movement resolves to its **parent-work** page (Clair de lune is track 3 of the suite),
+so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is stored).
 
 **Stubbed / not started:**
 - `musescore.py` connector — `.search()` raises `NotImplementedError` (Phase 3).
@@ -522,9 +529,11 @@ docker compose run --rm ingest --query "Clair de Lune"
   song "Clair de Lune"); both keep a high `match_score`. Conversely a real rendition
   titled by its parent work ("Suite bergamasque … Clair de lune") can score low.
   Separating these needs audio/semantic signal — future work.
-- **IMSLP disambiguation / movement resolution** — search returns disambig pages and
-  redirects, and movements live under parent works, so the real score page for a movement
-  isn't always reached. Following disambig/redirect links to the true work page is open.
+- **IMSLP per-movement labeling** — disambiguation pages are now **resolved** to their
+  real work pages (`enrich_cards`, Option A). Remaining nicety: a movement (e.g. Clair de
+  lune) resolves to its **parent-work** page (Suite bergamasque, where it is track 3), so
+  a "from {parent_work}" label / movement anchor would improve the UX. `parent_work` is
+  already stored in `card.metadata`.
 - **Recommender evaluation metric** — how exactly to score "is it recommending well"
   (precision@k / NDCG / AUC / …) is not yet decided. See §6 → Evaluation & data
   bootstrapping.

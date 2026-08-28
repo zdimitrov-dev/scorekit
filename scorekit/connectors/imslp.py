@@ -18,10 +18,13 @@ non-profit).
 
 ``enrich(card)`` is an optional second step: it fetches the card's work page and
 adds per-file license (Public Domain / Creative Commons), instrumentation, piece
-style, and year to ``card.metadata`` (one extra request per card). Disambiguation
-and redirect pages have no score template and are flagged rather than parsed — the
-famous Debussy "Clair de lune" is itself a disambiguation page that points at the
-Suite bergamasque page. Not yet extracted (IMSLP serves these through a hashed file
+style, and year to ``card.metadata`` (one extra request per card).
+
+``enrich_cards(cards)`` enriches a whole batch and additionally **resolves
+disambiguation pages**: a signpost page like the Debussy "Clair de lune" (which
+holds no scores — it points at Suite bergamasque and two songs) is replaced by the
+real work-page cards it links to, each keeping the searched-piece title but pointing
+at the actual score page. Not yet extracted (IMSLP serves these through a hashed file
 system the API does not expose): direct PDF links and cover thumbnails.
 """
 from __future__ import annotations
@@ -50,6 +53,12 @@ log = logging.getLogger("scorekit.imslp")
 _TITLE_RE = re.compile(r"^(?P<title>.+?)\s*\((?P<last>[^,()]+),\s*(?P<first>[^()]+)\)\s*$")
 # Strip the <span class="searchmatch">…</span> markup MediaWiki puts in snippets.
 _TAG_RE = re.compile(r"<[^>]+>")
+# Templates on a disambiguation page that link to real work pages, e.g.
+# {{LinkWorkN|Suite bergamasque|CD 82|Debussy|Claude|0}} -> the page
+# "Suite bergamasque, CD 82 (Debussy, Claude)". {{LinkName|...}} (people) is not matched.
+_LINKWORK_RE = re.compile(r"\{\{LinkWork(?:N)?\|([^{}]*)\}\}")
+# Cap on how many works a single disambiguation page expands into.
+MAX_DISAMBIG_TARGETS = 5
 
 
 def _parse_title(page_title: str) -> tuple[str, str | None]:
@@ -77,6 +86,25 @@ def _strip_html(text: str) -> str:
     return unescape(_TAG_RE.sub("", text or "")).strip()
 
 
+def _disambiguation_targets(wt: str) -> list[str]:
+    """Real work-page titles a disambiguation page points to, from its
+    ``LinkWork`` / ``LinkWorkN`` templates.
+
+    >>> _disambiguation_targets("{{LinkWorkN|Suite bergamasque|CD 82|Debussy|Claude|0}}")
+    ['Suite bergamasque, CD 82 (Debussy, Claude)']
+    """
+    targets: list[str] = []
+    for inner in _LINKWORK_RE.findall(wt):
+        args = [a.strip() for a in inner.split("|")]
+        if len(args) < 4 or not (args[0] and args[2] and args[3]):
+            continue
+        title, cat, last, first = args[0], args[1], args[2], args[3]
+        page = (f"{title}, {cat}" if cat else title) + f" ({last}, {first})"
+        if page not in targets:
+            targets.append(page)
+    return targets
+
+
 def _wikitext_field(wt: str, name: str) -> str | None:
     """Extract a single ``|Field=value`` value from an IMSLP page template."""
     m = re.search(r"\|\s*" + re.escape(name) + r"\s*=\s*([^|\n}]*)", wt)
@@ -96,7 +124,10 @@ def parse_workpage(wt: str) -> dict:
     out: dict = {"enriched": True}
     if "#fte:imslppage" not in wt:
         out["is_work_page"] = False
-        out["is_disambiguation"] = ("can refer to" in wt.lower()) or ("{{LinkWork" in wt)
+        targets = _disambiguation_targets(wt)
+        out["is_disambiguation"] = bool(targets) or ("can refer to" in wt.lower())
+        if targets:
+            out["disambiguation_targets"] = targets
         return out
 
     out["is_work_page"] = True
@@ -213,3 +244,55 @@ class ImslpConnector(Connector):
         })
         resp.raise_for_status()
         return resp.json()["parse"]["wikitext"]["*"]
+
+    def enrich_cards(self, cards: list[Card]) -> list[Card]:
+        """Enrich IMSLP cards and **resolve disambiguation pages**.
+
+        Each IMSLP card is enriched in place. A card whose page is a disambiguation
+        (e.g. the Debussy "Clair de lune" signpost, which holds no scores) is
+        *replaced* by the real work-page cards it points to — each keeping the
+        searched-piece title but linking to the actual score page and carrying its
+        own enrichment. Non-IMSLP cards pass through unchanged.
+        """
+        out: list[Card] = []
+        for card in cards:
+            if card.source != self.source:
+                out.append(card)
+                continue
+            self.enrich(card)
+            targets = card.metadata.get("disambiguation_targets") or []
+            if card.metadata.get("is_disambiguation") and targets:
+                resolved = [self._resolved_card(card, t) for t in targets[:MAX_DISAMBIG_TARGETS]]
+                for rc in resolved:
+                    self.enrich(rc)
+                log.info("[imslp] resolved disambiguation %r -> %d work page(s)",
+                         card.metadata.get("imslp_page_title"), len(resolved))
+                out.extend(resolved)
+            else:
+                out.append(card)
+        return out
+
+    def _resolved_card(self, original: Card, target_title: str) -> Card:
+        """A score card for ``target_title`` that inherits the searched-piece title
+        from the disambiguation card (so it stays query-relevant) but links to the
+        real work page."""
+        work_title, composer = _parse_title(target_title)
+        author = original.author or composer
+        md = {
+            "imslp_page_title": target_title,
+            "composer": author,
+            "resolved_from_disambiguation": (original.metadata or {}).get("imslp_page_title"),
+            "parent_work": work_title,
+        }
+        score = (original.metadata or {}).get("match_score")
+        if score is not None:
+            md["match_score"] = score
+        return Card(
+            source=self.source,
+            external_id=target_title,       # dedup on the real page
+            url=_work_url(target_title),
+            title=original.title,           # keep the searched-piece name
+            kind="score",
+            author=author,
+            metadata=md,
+        )

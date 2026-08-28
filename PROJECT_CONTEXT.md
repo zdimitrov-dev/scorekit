@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) live, enriched, disambiguation-resolved; attribution filter in ·
+**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) live + enriched + disambiguation-resolved; Phase 3 (MuseScore) framework laid; attribution filter in ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -17,7 +17,7 @@
 | Database schema (`db/schema.sql`) | ✅ Applied to live Supabase; RLS enabled on all tables |
 | Supabase project | ✅ Provisioned — schema applied, RLS on, `.env` filled & connection verified |
 | Docker image build | ⛔ Not built/verified yet |
-| Source connectors | 🟡 YouTube **live**; IMSLP **live** (search + work-page enrichment, gated by `IMSLP_ENABLED`); MuseScore stub |
+| Source connectors | 🟡 YouTube **live**; IMSLP **live** (search + enrichment, gated by `IMSLP_ENABLED`); MuseScore **framework laid** (Google CSE + cache, gated by `GOOGLE_CSE_*`) |
 | Attribution + enrichment | ✅ Match-scoring filter (`scorekit/matching.py`) + IMSLP enrichment (license, instrumentation, style, year) |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI / swipe / recommender | ⛔ Not started (Phases 4–6) |
@@ -104,7 +104,7 @@ scorekit/
 │   │   ├── base.py         # Connector ABC (.source + .search) + ConnectorUnavailable
 │   │   ├── youtube.py      # Phase 1 — implemented, tested, live
 │   │   ├── imslp.py        # Phase 2 — search + work-page enrichment, gated by IMSLP_ENABLED
-│   │   └── musescore.py    # STUB (Phase 3)
+│   │   └── musescore.py    # Phase 3 — framework (Google Custom Search + per-query cache), gated by GOOGLE_CSE_*
 │   └── jobs/
 │       ├── __init__.py
 │       └── ingest.py       # CLI orchestrator: search → match-filter → enrich → persist
@@ -113,7 +113,8 @@ scorekit/
     ├── test_store.py       # persistence upserts (fake client)
     ├── test_matching.py    # attribution match-scoring + filter
     ├── test_youtube.py     # YouTube parsing/enrichment + connector
-    └── test_imslp.py       # IMSLP parsing, enrichment, connector
+    ├── test_imslp.py       # IMSLP parsing, enrichment, connector
+    └── test_musescore.py   # MuseScore CSE mapping, cache, gate
 ```
 
 ---
@@ -396,7 +397,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 | 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
 | 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
 | 2 | IMSLP connector | ✅ Live + enriched + **disambiguation resolution** (Option A), gated by `IMSLP_ENABLED` (terms confirmed). Open: per-movement labeling, thumbnails/PDF links |
-| 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | ⛔ |
+| 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | 🟡 Framework laid (CSE connector + per-query TTL cache, unit-tested), gated & inert until `GOOGLE_CSE_*` set; needs a Programmable Search Engine + API key, then verify live |
 | 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
 | 6 | Recommendation engine / home feed | ⛔ |
@@ -455,8 +456,15 @@ enrichment). Verified live: Debussy "Clair de lune" → the Suite bergamasque pi
 a movement resolves to its **parent-work** page (Clair de lune is track 3 of the suite),
 so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is stored).
 
+**Framework laid, inert (needs config):**
+- `scorekit/connectors/musescore.py` — **Phase 3 framework.** Google Custom Search JSON
+  API restricted to musescore.com → `kind="listing"` cards with preview thumbnails. Gated
+  by `GOOGLE_CSE_ID`/`GOOGLE_CSE_KEY` (raises `ConnectorUnavailable` until set). Per-query
+  TTL **file cache** protects the 100/day CSE quota; HTTP 429 → skip. Unit-tested
+  (`tests/test_musescore.py`); **not yet verified live**. Deferred: >10-result pagination,
+  instrumentation/arranger parsing, DB-backed cache (the file cache is single-machine).
+
 **Stubbed / not started:**
-- `musescore.py` connector — `.search()` raises `NotImplementedError` (Phase 3).
 - IMSLP thumbnails & direct PDF links — served via IMSLP's hashed file system, not
   exposed by the API; deferred.
 - No feed, UI, swipe logging, or recommender yet (Phases 4-6).
@@ -493,7 +501,8 @@ docker compose run --rm ingest --query "Clair de Lune"
 | `SUPABASE_DB_URL` | Direct Postgres URI (used to apply schema) | Supabase → Settings → Database → Connection string (URI) |
 | `YOUTUBE_API_KEY` | YouTube Data API (Phase 1) | Google Cloud console |
 | `IMSLP_ENABLED` | Enable the IMSLP connector (Phase 2); inert until set (`1`/`true`). Confirm IMSLP terms first | no key needed (public MediaWiki API) |
-| `GOOGLE_CSE_ID` / `GOOGLE_CSE_KEY` | MuseScore via Google Custom Search (Phase 3) | Google Programmable Search Engine |
+| `GOOGLE_CSE_ID` | Programmable Search Engine id (`cx`); enables the MuseScore connector | programmablesearchengine.google.com (site = musescore.com) |
+| `GOOGLE_CSE_KEY` | Custom Search API key (both CSE vars required) | Google Cloud console → enable "Custom Search API" → API key |
 
 ---
 

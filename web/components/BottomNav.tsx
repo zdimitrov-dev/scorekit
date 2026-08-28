@@ -1,12 +1,12 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Search, Settings } from "lucide-react";
+import { Home, Search, Bookmark } from "lucide-react";
 
 const ITEMS = [
   { href: "/", label: "Home", Icon: Home },
   { href: "/search", label: "Search", Icon: Search },
-  { href: "/settings", label: "Settings", Icon: Settings },
+  { href: "/favorites", label: "Saved", Icon: Bookmark },
 ] as const;
 
 export default function BottomNav() {

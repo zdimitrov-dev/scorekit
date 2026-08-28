@@ -69,7 +69,7 @@ docker compose run --rm ingest --query "Clair de Lune"
 | 1 | YouTube connector — search, enrich, persist ✅ |
 | 2 | IMSLP connector — framework laid (gated pending terms) |
 | 3 | MuseScore via Google Custom Search — framework laid (gated on CSE keys) |
-| 4 | Search feed UI (mixed-card masonry) |
+| 4 | Feed UI — Next.js masonry board (`web/`) 🚧 |
 | 5 | Swipe interaction + logging |
 | 6 | Recommendation engine (home feed) — the ML centerpiece |
 | 7 | Polish + deploy |

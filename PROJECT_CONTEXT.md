@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-27 · **Phase:** Phase 1 (YouTube) live; Phase 2 (IMSLP) live + enriched + disambiguation-resolved; Phase 3 (MuseScore) framework laid; attribution filter in ·
+**Last updated:** 2026-08-28 · **Phase:** connectors (YouTube live; IMSLP live+enriched; MuseScore framework); attribution + enrichment in; **Phase 4 feed UI (`web/`) in progress** ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -20,7 +20,8 @@
 | Source connectors | 🟡 YouTube **live**; IMSLP **live** (search + enrichment, gated by `IMSLP_ENABLED`); MuseScore **framework laid** (Google CSE + cache, gated by `GOOGLE_CSE_*`) |
 | Attribution + enrichment | ✅ Match-scoring filter (`scorekit/matching.py`) + IMSLP enrichment (license, instrumentation, style, year) |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
-| Feed UI / swipe / recommender | ⛔ Not started (Phases 4–6) |
+| Feed UI (Phase 4) | 🟡 In progress — Next.js app in `web/` (masonry board, bottom nav, click-to-expand modal, like/save); reads Supabase server-side |
+| Swipe logging / recommender | ⛔ Not started (Phases 5–6) |
 
 **The immediate next action:** the ingest pipeline is now `search → attribution
 match-filter → IMSLP enrichment (+ disambiguation resolution) → persist`, verified live
@@ -108,13 +109,17 @@ scorekit/
 │   └── jobs/
 │       ├── __init__.py
 │       └── ingest.py       # CLI orchestrator: search → match-filter → enrich → persist
-└── tests/
-    ├── test_normalize.py   # slug normalizer
-    ├── test_store.py       # persistence upserts (fake client)
-    ├── test_matching.py    # attribution match-scoring + filter
-    ├── test_youtube.py     # YouTube parsing/enrichment + connector
-    ├── test_imslp.py       # IMSLP parsing, enrichment, connector
-    └── test_musescore.py   # MuseScore CSE mapping, cache, gate
+├── tests/
+│   ├── test_normalize.py   # slug normalizer
+│   ├── test_store.py       # persistence upserts (fake client)
+│   ├── test_matching.py    # attribution match-scoring + filter
+│   ├── test_youtube.py     # YouTube parsing/enrichment + connector
+│   ├── test_imslp.py       # IMSLP parsing, enrichment, connector
+│   └── test_musescore.py   # MuseScore CSE mapping, cache, gate
+└── web/                    # Phase 4 — Next.js feed app (App Router, Tailwind, framer-motion)
+    ├── app/                # pages: / (home feed), /search, /settings
+    ├── components/         # Feed, PieceCard, CardModal, BottomNav, SearchFeed
+    └── lib/                # supabase (server), cards, types, useCollection
 ```
 
 ---
@@ -398,7 +403,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 | 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
 | 2 | IMSLP connector | ✅ Live + enriched + **disambiguation resolution** (Option A), gated by `IMSLP_ENABLED` (terms confirmed). Open: per-movement labeling, thumbnails/PDF links |
 | 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | 🟡 Framework laid (CSE connector + per-query TTL cache, unit-tested), gated & inert until `GOOGLE_CSE_*` set; needs a Programmable Search Engine + API key, then verify live |
-| 4 | Search feed UI (mixed-card masonry) | ⛔ Framework TBD |
+| 4 | Feed UI (mixed-card masonry) | 🟡 In progress — Next.js `web/`: masonry board, bottom nav, framer-motion expand modal, like/save (localStorage). Open: swipe, source-diversity ranking, live search→ingest |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
 | 6 | Recommendation engine / home feed | ⛔ |
 | 7 | Polish + deploy (branding, domain, demo) | ⛔ |
@@ -467,7 +472,20 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
 **Stubbed / not started:**
 - IMSLP thumbnails & direct PDF links — served via IMSLP's hashed file system, not
   exposed by the API; deferred.
-- No feed, UI, swipe logging, or recommender yet (Phases 4-6).
+- Swipe logging (Phase 5) and the recommender (Phase 6) not started.
+
+**Phase 4 feed UI — `web/` (in progress):**
+- Next.js (App Router) + Tailwind v4 + framer-motion + lucide, in `scorekit/web/`.
+  Reads Supabase **server-side** with the service key (no secret in the browser);
+  `web/.env.local` holds `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` (gitignored).
+- Masonry board (`columns-2 md:3 xl:4`), hover-darken titles, source/duration badges,
+  gradient placeholder tiles for score cards (IMSLP has no thumbnail). 24 then "Load more".
+- Fixed bottom nav (Home / Search / Settings — settings is a stub). Search filters the
+  already-loaded cards. Ordering: relevance (`match_score`) then `view_count`.
+- Click-to-expand modal via framer-motion shared `layoutId`: the card morphs to cover
+  most of the page (content left, info right — title link, sheet link, badges, placeholder
+  comments, Like/Save via localStorage), and the X animates it back.
+- Run: `cd web && npm install && npm run dev`. Verified live against the real DB.
 
 ---
 
@@ -521,8 +539,17 @@ docker compose run --rm ingest --query "Clair de Lune"
 
 ## 11. Open questions / decisions pending
 
-- **Frontend framework** for the feed (Phase 4) — not chosen. The personal site is
-  Next.js/TypeScript, so that's a natural candidate.
+- **Frontend framework** — ✅ resolved: Next.js (App Router) + Tailwind + framer-motion,
+  in `web/`.
+- **Feed source diversity** — the feed sorts by relevance then popularity, which clusters
+  the high-view YouTube cards first and pushes IMSLP score cards to the end. A
+  source-diversity / interleave re-rank would make the board feel more mixed.
+- **Live search → ingestion** — search currently filters cards already in the DB; wiring a
+  query to trigger the ingest pipeline (and show a mixed board for a brand-new piece) is open.
+- **Auth for like/save + interactions** — likes/saves persist to `localStorage` for now.
+  Wiring them (and swipe logging, Phase 5) to Supabase needs the `users` table / auth.
+- **Reads via service key vs public RLS** — the feed reads server-side with the service
+  key; switching to a public-read RLS policy + anon key would allow direct client reads.
 - **`users` table** — `interactions.user_id` is a bare uuid; wire it to Supabase
   `auth.users` when auth is added.
 - **Scheduling** — ingestion is a CLI job today; the "scheduled jobs" story

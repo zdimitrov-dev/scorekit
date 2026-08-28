@@ -1,11 +1,16 @@
 "use client";
 import { useMemo, useState } from "react";
+import { AnimatePresence } from "framer-motion";
 import { Search } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
 import Feed from "./Feed";
+import CardModal from "./CardModal";
+import ScoresDrawer from "./ScoresDrawer";
 
 export default function SearchFeed({ cards }: { cards: FeedCard[] }) {
   const [q, setQ] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selected, setSelected] = useState<FeedCard | null>(null);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -17,9 +22,13 @@ export default function SearchFeed({ cards }: { cards: FeedCard[] }) {
     );
   }, [q, cards]);
 
+  const videos = filtered.filter((c) => c.source === "youtube");
+  const scores = filtered.filter((c) => c.source === "imslp" || c.source === "musescore");
+
   return (
     <div>
-      <div className="sticky top-0 z-30 -mx-3 mb-4 bg-[var(--background)]/90 px-3 py-3 backdrop-blur sm:-mx-5 sm:px-5">
+      {/* search bar (sticks below the top bar) */}
+      <div className="sticky top-14 z-20 -mx-3 mb-4 bg-[var(--background)]/90 px-3 py-3 backdrop-blur sm:-mx-5 sm:px-5">
         <div className="relative">
           <Search
             size={18}
@@ -34,7 +43,23 @@ export default function SearchFeed({ cards }: { cards: FeedCard[] }) {
           />
         </div>
       </div>
-      <Feed cards={filtered} emptyLabel={q ? `No results for “${q}”.` : "Type to search."} />
+
+      {/* videos — the centerpiece board; pushed left on large screens when the drawer is open */}
+      <div className={`transition-[margin] duration-300 ${drawerOpen ? "lg:mr-[344px]" : ""}`}>
+        <Feed
+          cards={videos}
+          onSelect={setSelected}
+          emptyLabel={q ? `No videos for “${q}”.` : "Type to search."}
+        />
+      </div>
+
+      {/* scores — IMSLP + MuseScore in a slide-out drawer */}
+      <ScoresDrawer scores={scores} open={drawerOpen} setOpen={setDrawerOpen} onSelect={setSelected} />
+
+      {/* shared expand modal for both the board and the drawer */}
+      <AnimatePresence>
+        {selected && <CardModal card={selected} onClose={() => setSelected(null)} />}
+      </AnimatePresence>
     </div>
   );
 }

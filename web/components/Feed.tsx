@@ -7,9 +7,20 @@ import CardModal from "./CardModal";
 
 const PAGE = 24;
 
-export default function Feed({ cards, emptyLabel }: { cards: FeedCard[]; emptyLabel?: string }) {
+export default function Feed({
+  cards,
+  emptyLabel,
+  onSelect,
+}: {
+  cards: FeedCard[];
+  emptyLabel?: string;
+  // when provided, selection is delegated to the parent (which owns the modal);
+  // otherwise Feed manages its own modal.
+  onSelect?: (c: FeedCard) => void;
+}) {
   const [visible, setVisible] = useState(PAGE);
   const [selected, setSelected] = useState<FeedCard | null>(null);
+  const select = onSelect ?? setSelected;
 
   if (cards.length === 0) {
     return <p className="py-24 text-center text-[var(--muted)]">{emptyLabel ?? "No cards yet."}</p>;
@@ -21,7 +32,7 @@ export default function Feed({ cards, emptyLabel }: { cards: FeedCard[]; emptyLa
     <>
       <div className="columns-2 gap-3 md:columns-3 xl:columns-4">
         {shown.map((card, i) => (
-          <PieceCard key={card.id} card={card} index={i} onSelect={setSelected} />
+          <PieceCard key={card.id} card={card} index={i} onSelect={select} />
         ))}
       </div>
 
@@ -36,9 +47,11 @@ export default function Feed({ cards, emptyLabel }: { cards: FeedCard[]; emptyLa
         </div>
       )}
 
-      <AnimatePresence>
-        {selected && <CardModal card={selected} onClose={() => setSelected(null)} />}
-      </AnimatePresence>
+      {!onSelect && (
+        <AnimatePresence>
+          {selected && <CardModal card={selected} onClose={() => setSelected(null)} />}
+        </AnimatePresence>
+      )}
     </>
   );
 }

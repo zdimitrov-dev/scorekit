@@ -29,3 +29,6 @@ Thumbs.db
 
 # Local reference assets (kept local, not committed)
 recommendation-method.svg
+
+# Node (root dev launcher)
+node_modules/

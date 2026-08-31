@@ -499,12 +499,19 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
   from localStorage), `/profile` (scaffold), `/settings` (stub).
 - **API (`scorekit/api.py`, FastAPI):** `GET /search` (blocking) and `GET /search/stream`
   (NDJSON per-source batches, each persisted before streaming). The Next route
-  `/api/search` proxies the stream server-to-server. Run: `uvicorn scorekit.api:app --port 8000`
-  (`web/.env.local` `SCOREKIT_API_URL` points at it; defaults to `http://localhost:8000`).
+  `/api/search` proxies the stream server-to-server (`web/.env.local` `SCOREKIT_API_URL`
+  points at it; defaults to `http://localhost:8000`).
 - Click-to-expand modal via framer-motion shared `layoutId`: the card morphs to cover
   most of the page (content left, info right — title link, sheet link, badges, placeholder
   comments, Like/Save via localStorage), and the X animates it back.
-- Run: `cd web && npm install && npm run dev`. Verified live against the real DB.
+- **Run both servers with one command** — the root `package.json` dev launcher (uses
+  `concurrently` + `scripts/dev-api.mjs`, which finds the venv Python cross-platform):
+  ```
+  npm install        # once, at the repo root — installs concurrently
+  npm run dev        # starts web (:3210) + api (:8000) together; Ctrl+C stops both
+  ```
+  (First-time web setup: `cd web && npm install`, and the API needs the venv +
+  `pip install -r requirements.txt`.) Verified live against the real DB.
 
 ---
 

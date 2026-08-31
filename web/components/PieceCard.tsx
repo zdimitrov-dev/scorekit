@@ -88,10 +88,16 @@ export default function PieceCard({
           className="flex w-full flex-col gap-2.5 bg-gradient-to-br from-[#20202b] to-[#2c2c3b] p-4 pt-9"
         >
           <div className="flex-1">
-            <p className="line-clamp-2 text-sm font-semibold">
-              {card.author ?? card.piece?.composer ?? "Unknown composer"}
-            </p>
-            <p className="mt-0.5 line-clamp-3 text-xs text-[var(--muted)]">{title}</p>
+            {card.author ?? card.piece?.composer ? (
+              <>
+                <p className="line-clamp-2 text-sm font-semibold">
+                  {card.author ?? card.piece?.composer}
+                </p>
+                <p className="mt-0.5 line-clamp-3 text-xs text-[var(--muted)]">{title}</p>
+              </>
+            ) : (
+              <p className="line-clamp-4 text-sm font-semibold">{title}</p>
+            )}
           </div>
           {chips.length > 0 && (
             <div className="flex flex-wrap gap-1">

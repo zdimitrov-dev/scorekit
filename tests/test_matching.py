@@ -1,4 +1,4 @@
-from scorekit.matching import annotate_and_filter, match_score
+from scorekit.matching import DROP_THRESHOLD, annotate_and_filter, match_score
 from scorekit.models import Card
 
 
@@ -33,6 +33,15 @@ def test_unrelated_scores_zero():
 def test_imslp_real_work_gets_composer_boost():
     c = _card("Clair de lune", source="imslp", author="Claude Debussy")
     assert match_score(c, "Clair de Lune", "Debussy") == 1.0
+
+
+def test_opus_number_disambiguates():
+    # a bare opus query must reject a *different* opus that shares the common words
+    q = "Op 48 No 1"
+    right = _card("F. Chopin: Nocturne in C minor, Op.48 No.1")
+    wrong = _card("Album for the Young Op.68 No.1")
+    assert match_score(right, q) == 1.0
+    assert match_score(wrong, q) < DROP_THRESHOLD
 
 
 def test_annotate_and_filter_drops_and_scores():

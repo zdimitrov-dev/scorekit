@@ -65,6 +65,16 @@ def match_score(card: Card, query: str, composer: str | None = None) -> float:
         overlap = len(set(q) & set(ct)) / len(set(q))
         title = 0.5 * overlap
 
+    # Opus / movement numbers are highly distinctive: a query number missing from the
+    # card usually means a *different* work ("Op 48 No 1" vs "Op 68 No 1"), while common
+    # words (op, no, in) match everything. Scale the title score by how many of the
+    # query's numbers the card actually has.
+    q_nums = {t for t in q if t.isdigit()}
+    if q_nums:
+        c_nums = {t for t in ct if t.isdigit()}
+        num_frac = len(q_nums & c_nums) / len(q_nums)
+        title *= 0.3 + 0.7 * num_frac
+
     composer_boost = 0.0
     if composer:
         toks = _tokens(composer)

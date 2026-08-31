@@ -58,16 +58,20 @@ def _clean_title(title: str) -> str:
 
 
 def _thumbnail(result: dict) -> str | None:
-    """First image from a Tavily result (a string url or a {url, ...} object)."""
-    images = result.get("images") or []
-    if not images:
-        return None
-    first = images[0]
-    if isinstance(first, str):
-        return first
-    if isinstance(first, dict):
-        return first.get("url")
-    return None
+    """Best score-preview image from a Tavily result, skipping MuseScore's promo /
+    sale banners (the green/blue "Pro" ads that otherwise render as a weird strip)."""
+    urls: list[str] = []
+    for im in result.get("images") or []:
+        if isinstance(im, str):
+            urls.append(im)
+        elif isinstance(im, dict) and im.get("url"):
+            urls.append(im["url"])
+    # prefer an actual first-page score render
+    score = [u for u in urls if "scoredata" in u or "/score_" in u]
+    if score:
+        return score[0]
+    non_promo = [u for u in urls if "sale_offer" not in u and "image_desktop" not in u]
+    return non_promo[0] if non_promo else None
 
 
 class _FileCache:

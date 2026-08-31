@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from .connectors import CONNECTORS
 from .connectors.base import ConnectorUnavailable
@@ -27,6 +28,7 @@ from .jobs.ingest import ingest
 from .matching import annotate_and_filter
 from .models import Piece
 from .normalize import normalize_slug
+from .recommend import rank_cards
 from .store import upsert_cards, upsert_piece
 
 log = logging.getLogger("scorekit.api")
@@ -133,6 +135,65 @@ def search(
     except Exception:
         log.exception("ingest failed for %r", q)
     return {"slug": slug, "query": q, "ingested": True, "cards": _cards_for_slug(slug)}
+
+
+class Signal(BaseModel):
+    """One engagement event. ``card_id`` is what the browser holds; the server resolves
+    it to the piece, since taste is about pieces, not individual uploads."""
+
+    card_id: str
+    action: str = "like"
+
+
+class RecommendRequest(BaseModel):
+    signals: list[Signal] = Field(default_factory=list)
+    limit: int = 60
+    # Whether to hold back pieces the user has already engaged with. On by default:
+    # a home feed that re-serves what you just saved is not a recommendation.
+    exclude_seen: bool = True
+
+
+def _piece_tags(sb) -> dict[str, list[tuple[str, str]]]:
+    rows = sb.table("piece_tags").select("piece_id,key,value").execute().data or []
+    tags: dict[str, list[tuple[str, str]]] = {}
+    for r in rows:
+        tags.setdefault(r["piece_id"], []).append((r["key"], r["value"]))
+    return tags
+
+
+@app.post("/recommend")
+def recommend(req: RecommendRequest) -> dict:
+    """Rank the whole corpus for one user's taste (content-based; see recommend.py).
+
+    Takes signals in the request rather than reading a user row because likes/saves still
+    live in the browser until auth lands (Phase 5). The ranker itself is indifferent to
+    where they came from, so moving to the ``interactions`` table is a change here only.
+    """
+    sb = get_client()
+    cards = sb.table("cards").select(_CARD_SELECT + ",piece_id").limit(1000).execute().data or []
+    tags = _piece_tags(sb)
+
+    # resolve the browser's card ids to piece ids
+    by_card = {c["id"]: c.get("piece_id") for c in cards}
+    signals: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for s in req.signals:
+        piece_id = by_card.get(s.card_id)
+        if not piece_id:
+            continue
+        signals.append((piece_id, s.action))
+        if s.action != "skip":
+            seen.add(piece_id)
+
+    ranked = rank_cards(
+        cards, tags, signals=signals, limit=req.limit,
+        exclude_piece_ids=seen if req.exclude_seen else (),
+    )
+    return {
+        "cards": ranked,
+        "personalized": bool(signals),
+        "tagged_pieces": len(tags),
+    }
 
 
 @app.get("/search/stream")

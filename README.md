@@ -17,8 +17,13 @@ Two feed modes over one system:
 ingestion persists pieces + cards end-to-end from YouTube, IMSLP (with enrichment and
 disambiguation resolution) and MuseScore (via Tavily). **Phase 4 — the feed UI (`web/`)
 is in progress**: a Next.js masonry board with a live search that ingests unseen pieces
-on demand and streams results per source as they arrive. The home-page recommender
-(Phase 6) is next. See the build plan below.
+on demand and streams results per source as they arrive.
+
+**The content-based recommender is live.** Pieces are tagged from their cards
+(`scorekit/tagging.py`) and the home feed is ranked by tag affinity against what you have
+liked and saved, with IDF weighting, a popularity prior, and a diversity pass
+(`scorekit/recommend.py`). Collaborative filtering comes after Phase 5 supplies real
+interaction history. See the build plan below.
 
 ## Architecture
 
@@ -73,7 +78,7 @@ docker compose run --rm ingest --query "Clair de Lune"
 | 3 | MuseScore via Tavily search ✅ |
 | 4 | Feed UI — Next.js masonry board + live streaming search (`web/`) 🚧 |
 | 5 | Swipe interaction + logging |
-| 6 | Recommendation engine (home feed) — the ML centerpiece; content-based (tags) first, then collaborative 🚧 |
+| 6 | Recommendation engine (home feed) — the ML centerpiece. **Content-based half live** ✅; collaborative half awaits Phase 5 signal |
 | 7 | Polish + deploy |
 
 ## Data sources

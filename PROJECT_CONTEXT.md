@@ -21,14 +21,15 @@
 | Attribution + enrichment | ✅ Match-scoring filter (`scorekit/matching.py`) + IMSLP enrichment (license, instrumentation, style, year) |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI (Phase 4) | 🟡 In progress — Next.js app in `web/` (masonry board, bottom nav, click-to-expand modal, like/save); reads Supabase server-side |
-| Swipe logging / recommender | ⛔ Not started (Phases 5–6) |
+| Piece tagging (`piece_tags`) | ✅ Derived from cards by `scorekit/tagging.py` (job: `scorekit.jobs.tag_pieces`) |
+| Recommender — content-based | ✅ Live — ranks the home feed (`scorekit/recommend.py`, `POST /recommend`); signals still from localStorage |
+| Swipe logging / collaborative filtering | ⛔ Not started (Phase 5, then the collaborative half of Phase 6) |
 
-**The immediate next action:** the **home-page recommender (Phase 6, content-based first)**.
-Home currently renders a mixed board of everything as a stand-in. The plan is
-**content-based / non-collaborative ranking over `piece_tags`** (composer, era, style,
-instrumentation, difficulty), then a **collaborative** model layered on top once
-`interactions` has enough volume to learn from — content-based also solves the cold-start
-the collaborative model can't.
+**The immediate next action:** **Phase 5 — real interaction logging** (auth + writes to
+`interactions`), which is what the collaborative half of the recommender needs. The
+**content-based recommender is live** (see §6a): Home is ranked by tag affinity, but its
+signals still come from the browser's localStorage, so there is no cross-device or
+cross-user history to learn from yet.
 
 Open refinements elsewhere: YouTube `kind` via an LLM (see Open questions), the
 same-name/different-composition attribution residual, per-movement labeling (a resolved
@@ -106,6 +107,9 @@ scorekit/
 │   ├── normalize.py        # normalize_slug() — the cross-source dedupe key. TESTED.
 │   ├── store.py            # upsert_piece / upsert_cards → Supabase. TESTED.
 │   ├── matching.py         # attribution match-scoring; drop clear non-matches. TESTED.
+│   ├── tagging.py          # derive piece_tags (composer/era/style/instrumentation/form). TESTED.
+│   ├── recommend.py        # content-based ranker: profile → affinity → popularity → diversity. TESTED.
+│   ├── api.py              # FastAPI: /search, /search/stream (NDJSON), /recommend
 │   ├── connectors/
 │   │   ├── __init__.py     # Connector registry (CONNECTORS list, phase-ordered)
 │   │   ├── base.py         # Connector ABC (.source + .search) + ConnectorUnavailable
@@ -114,17 +118,21 @@ scorekit/
 │   │   └── musescore.py    # Phase 3 — Tavily search (site:musescore.com) + per-query cache, gated by TAVILY_API_KEY
 │   └── jobs/
 │       ├── __init__.py
-│       └── ingest.py       # CLI orchestrator: search → match-filter → enrich → persist
+│       ├── ingest.py       # CLI orchestrator: search → match-filter → enrich → persist
+│       └── tag_pieces.py   # rebuild piece_tags from stored cards (idempotent)
 ├── tests/
 │   ├── test_normalize.py   # slug normalizer
 │   ├── test_store.py       # persistence upserts (fake client)
 │   ├── test_matching.py    # attribution match-scoring + filter
 │   ├── test_youtube.py     # YouTube parsing/enrichment + connector
 │   ├── test_imslp.py       # IMSLP parsing, enrichment, connector
-│   └── test_musescore.py   # MuseScore Tavily mapping, cache, gate
+│   ├── test_musescore.py   # MuseScore Tavily mapping, cache, gate
+│   ├── test_api_stream.py  # per-source search cache (negative-cache regression)
+│   ├── test_tagging.py     # tag derivation + the corroboration rules
+│   └── test_recommend.py   # profile, IDF, affinity, cold start, diversity
 └── web/                    # Phase 4 — Next.js feed app (App Router, Tailwind, framer-motion)
-    ├── app/                # pages: / (home feed), /search, /settings
-    ├── components/         # Feed, PieceCard, CardModal, BottomNav, SearchFeed
+    ├── app/                # pages: / (home feed), /search, /settings; api/ proxies
+    ├── components/         # Feed, PieceCard, CardModal, BottomNav, SearchFeed, HomeFeed
     └── lib/                # supabase (server), cards, types, useCollection
 ```
 
@@ -223,6 +231,58 @@ score, listing)` · `interaction_action(like, skip, click)`
 ### Indexes
 `idx_cards_piece(piece_id)` · `idx_interactions_user(user_id, created_at desc)` ·
 `idx_interactions_piece(piece_id)` · `idx_piece_tags_kv(key, value)`
+
+---
+
+## 6a. Content-based recommender — **built** (`scorekit/tagging.py`, `scorekit/recommend.py`)
+
+The non-collaborative half is live and powers the home feed. It was built first on
+purpose: collaborative filtering can say nothing about a user with no neighbours or a
+piece nobody has touched, and this project starts with one user and a corpus that grows
+one search at a time. Content-based ranking works from the very first like, so it is both
+the launch ranker and — later — the cold-start fallback the collaborative model defers to.
+The two compose as `score = w·content + (1-w)·collaborative`.
+
+**Feature extraction (`scorekit/tagging.py`, job: `python -m scorekit.jobs.tag_pieces`).**
+Derives `piece_tags` from a piece and its cards: `composer`, `era`, `style`,
+`instrumentation` (a controlled vocabulary, not IMSLP's free text), `form` (nocturne,
+prelude, fugue…), `public_domain`. Tagging at the **piece** level is what makes uneven
+enrichment work: a YouTube card knows nothing about the music, but one IMSLP card carries
+style and instrumentation, and because both share a `piece_id` the whole piece — bare
+YouTube cards included — becomes rankable. Re-run the job after any vocabulary change; it
+replaces tags per piece, so it is idempotent and leaves no stale rows.
+
+Three lessons are baked into it, each found by running it over the real corpus:
+- **Only high-confidence cards define a piece** (`match_score >= CONFIDENT_MATCH`). The
+  attribution filter keeps loose neighbours on purpose; letting them describe the piece
+  tagged Debussy's "Clair de lune" a *rag*.
+- **Composer is voted, not taken from one row.** IMSLP's `author` names the *arranger* on
+  a derivative, which made "Moonlight Sonata" come out as Ramón León Egea. Known composer
+  surnames appearing across card titles outvote a lone author.
+- **A value needs corroboration** (≥2 cards) unless the piece's own title says it. One
+  ragtime cover or one orchestral transcription must not redefine the work.
+
+**Ranking (`scorekit/recommend.py`, endpoint: `POST /recommend`).** Four steps:
+profile → score → blend → diversify.
+- **Profile:** liked/saved pieces become a weighted tag vector. `save` (1.5) outweighs
+  `like` (1.0); `skip` is the negative (−0.8) — there is no dislike button. The vector is
+  L2-normalised so a heavy user isn't compared on a different scale to a new one.
+- **Score:** tag affinity, with **IDF weighting** so `public_domain=true` (which nearly
+  every piece has) can't drown out `composer=chopin` (which actually expresses taste).
+- **Blend:** a small popularity prior (`POPULARITY_WEIGHT = 0.15`, log-scaled views) so a
+  thin profile still ranks sensibly. Taste dominates by design.
+- **Diversify:** a greedy MMR pass penalising already-shown pieces and composers, so the
+  board reads like a feed rather than 20 cards of one piece.
+
+Every returned card carries a `metadata.rec` breakdown (`affinity`, `popularity`,
+`score`) so the ordering can be explained and debugged instead of being opaque.
+
+**Current limitation — where the signals come from.** `POST /recommend` takes signals in
+the request body because likes/saves still live in `localStorage` (auth is Phase 5). The
+ranker is indifferent to their origin, so switching to the `interactions` table is a
+change in `api.py` only, not in the algorithm. Verified live: liking a Bach prelude lifts
+Pachelbel's Canon (baroque) to the top; liking a Chopin nocturne puts all three
+Chopin/nocturne pieces first at affinity 1.00.
 
 ---
 
@@ -410,8 +470,8 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 | 2 | IMSLP connector | ✅ Live + enriched + **disambiguation resolution** (Option A), gated by `IMSLP_ENABLED` (terms confirmed). Open: per-movement labeling, thumbnails/PDF links |
 | 3 | MuseScore via Tavily search (`include_domains=musescore.com`, cached) | ✅ Live and verified against the API (score-preview thumbnails rebuilt via the CDN). (Switched off Google CSE, which is closed to new projects.) Open: pagination, uploader/instrumentation parsing |
 | 4 | Feed UI (mixed-card masonry) | 🟡 In progress — Next.js `web/`: masonry board, bottom nav, framer-motion expand modal, like/save (localStorage), live streaming search + sorts + recent searches. Open: swipe, source-diversity ranking |
-| 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
-| 6 | Recommendation engine / home feed | 🟡 Next up — **content-based (tag) ranking first**, collaborative filtering layered on afterwards |
+| 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ Next up — the prerequisite for collaborative filtering |
+| 6 | Recommendation engine / home feed | 🟡 **Content-based half built and live** (see §6a) — tags + IDF affinity + popularity prior + diversity, ranking the home feed. Collaborative half awaits Phase 5 signal |
 | 7 | Polish + deploy (branding, domain, demo) | ⛔ |
 
 Phases 0–4 are mostly mechanical pipeline work and should move quickly. Phases 5–6

@@ -242,12 +242,19 @@ class ImslpConnector(Connector):
             return card
         page = card.metadata.get("imslp_page_title") or card.title
         try:
-            wt = self._fetch_wikitext(page)
+            parse = self._fetch_parse(page)
         except Exception as exc:            # network / missing page / bad payload
             log.warning("[imslp] enrich failed for %r: %s", page, exc)
             card.metadata["enriched"] = False
             return card
+        wt = parse.get("wikitext", {}).get("*", "")
         card.metadata.update(parse_workpage(wt))
+        # The page title after following redirects = the canonical work. Two cards
+        # that resolve to the SAME canonical page are true duplicates (e.g. a redirect
+        # page and the work it points at) — unlike cards that merely reuse a thumbnail.
+        canonical = parse.get("title")
+        if canonical:
+            card.metadata["canonical_page"] = canonical
         # Resolve a real first-page score thumbnail if the page has one.
         thumb = card.metadata.get("thumb_filename")
         if thumb and not card.thumbnail_url:
@@ -275,7 +282,7 @@ class ImslpConnector(Connector):
             log.warning("[imslp] thumbnail resolve failed for %r: %s", filename, exc)
             return None
 
-    def _fetch_wikitext(self, page_title: str) -> str:
+    def _fetch_parse(self, page_title: str) -> dict:
         resp = self.client.get(IMSLP_API, params={
             "action": "parse",
             "page": page_title,
@@ -284,7 +291,7 @@ class ImslpConnector(Connector):
             "format": "json",
         })
         resp.raise_for_status()
-        return resp.json()["parse"]["wikitext"]["*"]
+        return resp.json()["parse"]
 
     def enrich_cards(self, cards: list[Card]) -> list[Card]:
         """Enrich IMSLP cards and **resolve disambiguation pages**.

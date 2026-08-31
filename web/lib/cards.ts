@@ -22,13 +22,14 @@ export async function getCards(limit = 300): Promise<FeedCard[]> {
   if (error) throw new Error(error.message);
   const cards = (data ?? []) as unknown as FeedCard[];
   cards.sort(byRelevance);
-  // Drop cards that share a thumbnail with a higher-ranked one — e.g. an IMSLP
-  // redirect page and the canonical work both resolve to the same first-page image.
-  const seenThumbs = new Set<string>();
+  // Dedupe only *true* duplicates: cards that resolve to the same canonical page
+  // (e.g. an IMSLP redirect and the work it points at). Cards that merely reuse a
+  // thumbnail but resolve to different pages are kept — thumbnail != content.
+  const seen = new Set<string>();
   return cards.filter((c) => {
-    if (!c.thumbnail_url) return true;
-    if (seenThumbs.has(c.thumbnail_url)) return false;
-    seenThumbs.add(c.thumbnail_url);
+    const key = `${c.source}:${c.metadata?.canonical_page ?? c.external_id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }

@@ -182,7 +182,9 @@ def test_disambiguation_targets_parsing():
 
 
 def test_enrich_merges_metadata():
-    parse_payload = {"parse": {"wikitext": {"*": WORKPAGE_WT}}}
+    parse_payload = {
+        "parse": {"title": "Suite bergamasque, CD 82 (Debussy, Claude)", "wikitext": {"*": WORKPAGE_WT}}
+    }
     conn = ImslpConnector(client=_FakeClient(parse_payload))
     card = Card(source="imslp", external_id="Suite bergamasque, CD 82 (Debussy, Claude)",
                 url="u", title="Suite bergamasque", kind="score",
@@ -191,6 +193,8 @@ def test_enrich_merges_metadata():
     assert out.metadata["instrumentation"] == "piano"
     assert out.metadata["is_public_domain"] is True
     assert out.metadata["enriched"] is True
+    # the resolved page becomes the canonical dedup key
+    assert out.metadata["canonical_page"] == "Suite bergamasque, CD 82 (Debussy, Claude)"
 
 
 def test_enrich_handles_failure_gracefully():

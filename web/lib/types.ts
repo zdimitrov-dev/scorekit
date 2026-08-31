@@ -16,6 +16,7 @@ export interface CardMeta {
   licenses?: string[];
   parent_work?: string;
   resolved_from_disambiguation?: string;
+  canonical_page?: string;
   [k: string]: unknown;
 }
 

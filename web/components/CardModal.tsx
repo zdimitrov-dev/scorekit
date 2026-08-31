@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { X, Heart, Bookmark, ExternalLink, FileMusic } from "lucide-react";
 import type { FeedCard, Source } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
+import { cleanInstrumentation } from "@/lib/format";
 
 const SOURCE_LABEL: Record<Source, string> = {
   youtube: "YouTube",
@@ -120,7 +121,9 @@ export default function CardModal({ card, onClose }: { card: FeedCard; onClose: 
             <div className="mt-3 flex flex-wrap gap-1.5">
               <Badge>{SOURCE_LABEL[card.source]}</Badge>
               {card.kind && <Badge>{card.kind}</Badge>}
-              {m.instrumentation && <Badge>{m.instrumentation}</Badge>}
+              {cleanInstrumentation(m.instrumentation, 60) && (
+                <Badge>{cleanInstrumentation(m.instrumentation, 60)}</Badge>
+              )}
               {m.piece_style && <Badge>{m.piece_style}</Badge>}
               {m.is_public_domain && <Badge>public domain</Badge>}
             </div>

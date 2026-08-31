@@ -23,7 +23,15 @@ export default function SearchFeed({ cards }: { cards: FeedCard[] }) {
   }, [q, cards]);
 
   const videos = filtered.filter((c) => c.source === "youtube");
-  const scores = filtered.filter((c) => c.source === "imslp" || c.source === "musescore");
+  // scores keep relevance order; within equal match_score, show ones with a real
+  // first-page thumbnail before the themed placeholders (nicer at the top).
+  const scores = filtered
+    .filter((c) => c.source === "imslp" || c.source === "musescore")
+    .sort((a, b) => {
+      const ms = (b.metadata?.match_score ?? 0) - (a.metadata?.match_score ?? 0);
+      if (ms !== 0) return ms;
+      return (b.thumbnail_url ? 1 : 0) - (a.thumbnail_url ? 1 : 0);
+    });
 
   return (
     <div>

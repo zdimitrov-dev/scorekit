@@ -68,7 +68,7 @@ docker compose run --rm ingest --query "Clair de Lune"
 | 0 | Repo, Supabase schema (live, RLS on), Docker skeleton ✅ |
 | 1 | YouTube connector — search, enrich, persist ✅ |
 | 2 | IMSLP connector — framework laid (gated pending terms) |
-| 3 | MuseScore via Google Custom Search — framework laid (gated on CSE keys) |
+| 3 | MuseScore via Tavily search — built (gated on `TAVILY_API_KEY`) |
 | 4 | Feed UI — Next.js masonry board (`web/`) 🚧 |
 | 5 | Swipe interaction + logging |
 | 6 | Recommendation engine (home feed) — the ML centerpiece |
@@ -80,4 +80,4 @@ docker compose run --rm ingest --query "Clair de Lune"
 |---|---|---|
 | YouTube | YouTube Data API | Legal, structured. Descriptions often contain sheet-music links. |
 | IMSLP | Direct access | Public-domain classical scores. Confirm current terms before Phase 2. |
-| MuseScore | Google Custom Search (`site:musescore.com`), cached per piece | Sidesteps blocked scraping; only links out to already-indexed results. |
+| MuseScore | Tavily search (`include_domains=musescore.com`), cached per piece | Sidesteps blocked scraping and the discontinued MuseScore/Google Custom Search APIs; links out to indexed results. |

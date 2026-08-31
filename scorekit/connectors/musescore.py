@@ -1,21 +1,18 @@
 """MuseScore connector — Phase 3.
 
 MuseScore's public API was discontinued and hitting the site directly gets IPs
-blocked, so we **never touch MuseScore's servers**. Instead we query Google's index
-restricted to ``musescore.com`` via the Google Custom Search JSON API, and link out
-to the listings Google already indexed. Each result becomes a ``kind="listing"``
-card (with a preview thumbnail, unlike IMSLP).
+blocked, so we **never touch MuseScore's servers**. Instead we query the **Tavily
+search API** restricted to ``musescore.com`` (``include_domains``) and link out to
+the listings it indexed. Each result becomes a ``kind="listing"`` card.
 
-Gated by config: ``search()`` raises ``ConnectorUnavailable`` until both
-``GOOGLE_CSE_ID`` and ``GOOGLE_CSE_KEY`` are set, so the ingest job skips it until
-you've created a Programmable Search Engine (restricted to musescore.com) and an
-API key.
+(The original plan used Google's Custom Search JSON API, but Google closed that API
+to new projects — hence the switch to Tavily.)
 
-**Quota is the defining constraint** — the Custom Search JSON API allows only 100
-queries/day free (then paid, hard-capped at 10k/day). So responses are **cached
-per query** (a small TTL file cache by default) to avoid re-spending quota on the
-same piece, and an HTTP 429 is treated as ``ConnectorUnavailable`` (skip, don't
-crash the run).
+Gated by config: ``search()`` raises ``ConnectorUnavailable`` until ``TAVILY_API_KEY``
+is set, so the ingest job skips it until you've added a key (tavily.com — free tier
+is ~1,000 searches/month). Responses are **cached per query** (a TTL file cache) to
+stay within that budget, and auth/quota errors (401/403/429) are treated as
+``ConnectorUnavailable`` (skip, don't crash the run).
 
 Caveat: MuseScore listings are discovery links; many downloads require a MuseScore
 Pro subscription — these are not guaranteed-free scores like IMSLP's public domain.
@@ -35,10 +32,9 @@ from .base import Connector, ConnectorUnavailable
 from ..config import settings
 from ..models import Card
 
-CSE_API = "https://www.googleapis.com/customsearch/v1"
+TAVILY_API = "https://api.tavily.com/search"
 USER_AGENT = "scorekit/0.0 (+https://github.com/zdimitrov-dev/scorekit)"
-# CSE returns at most 10 results per request; more needs paginated `start` (extra quota).
-MAX_RESULTS = 10
+MAX_RESULTS = 20   # Tavily's per-request maximum
 CACHE_TTL_DAYS = 30
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "scorekit" / "musescore"
 
@@ -61,23 +57,22 @@ def _clean_title(title: str) -> str:
     return _SITE_SUFFIX_RE.sub("", title or "").strip()
 
 
-def _thumbnail(pagemap: dict) -> str | None:
-    """Best preview image from a CSE result's pagemap."""
-    thumbs = pagemap.get("cse_thumbnail") or []
-    if thumbs and thumbs[0].get("src"):
-        return thumbs[0]["src"]
-    metatags = pagemap.get("metatags") or []
-    if metatags and metatags[0].get("og:image"):
-        return metatags[0]["og:image"]
-    images = pagemap.get("cse_image") or []
-    if images and images[0].get("src"):
-        return images[0]["src"]
+def _thumbnail(result: dict) -> str | None:
+    """First image from a Tavily result (a string url or a {url, ...} object)."""
+    images = result.get("images") or []
+    if not images:
+        return None
+    first = images[0]
+    if isinstance(first, str):
+        return first
+    if isinstance(first, dict):
+        return first.get("url")
     return None
 
 
 class _FileCache:
-    """Tiny TTL file cache for raw CSE responses so we don't re-spend Google
-    Custom Search quota on the same query. Best-effort: any IO error is ignored."""
+    """Tiny TTL file cache for raw search responses so we don't re-spend the Tavily
+    query budget on the same piece. Best-effort: any IO error is ignored."""
 
     def __init__(self, directory: Path = DEFAULT_CACHE_DIR, ttl_days: int = CACHE_TTL_DAYS) -> None:
         self.dir = Path(directory)
@@ -119,7 +114,7 @@ class MuseScoreConnector(Connector):
     @property
     def client(self) -> Any:
         if self._client is None:
-            self._client = httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=15.0)
+            self._client = httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=20.0)
         return self._client
 
     @property
@@ -129,10 +124,9 @@ class MuseScoreConnector(Connector):
         return self._cache
 
     def search(self, query: str, limit: int = 20) -> list[Card]:
-        if not (settings.google_cse_id and settings.google_cse_key):
+        if not settings.tavily_api_key:
             raise ConnectorUnavailable(
-                "GOOGLE_CSE_ID and GOOGLE_CSE_KEY must be set for the MuseScore "
-                "connector (see .env.example)."
+                "TAVILY_API_KEY must be set for the MuseScore connector (see .env.example)."
             )
         num = max(1, min(limit, MAX_RESULTS))
         key = f"musescore:{query.strip().lower()}:{num}"
@@ -141,44 +135,42 @@ class MuseScoreConnector(Connector):
             data = self._fetch(query, num)
             self.cache.set(key, data)
 
-        return [self._to_card(item) for item in data.get("items", [])]
+        return [self._to_card(r) for r in data.get("results", [])]
 
     def _fetch(self, query: str, num: int) -> dict:
-        resp = self.client.get(CSE_API, params={
-            "key": settings.google_cse_key,
-            "cx": settings.google_cse_id,
-            "q": query,
-            "siteSearch": "musescore.com",   # force the site even if the CSE isn't restricted
-            "siteSearchFilter": "i",
-            "num": num,
-        })
+        resp = self.client.post(
+            TAVILY_API,
+            headers={"Authorization": f"Bearer {settings.tavily_api_key}"},
+            json={
+                "query": query,
+                "include_domains": ["musescore.com"],
+                "max_results": num,
+                "search_depth": "basic",
+                "include_images": True,
+            },
+        )
         status = getattr(resp, "status_code", 200)
-        if status == 429:
-            raise ConnectorUnavailable("Google Custom Search quota exceeded (HTTP 429).")
         if status in (401, 403):
-            # Bad/misconfigured key, or the project's Custom Search API isn't
-            # provisioned yet. Treat as unavailable (skip) rather than crashing ingest.
             raise ConnectorUnavailable(
-                f"Google Custom Search access denied (HTTP {status}) — check GOOGLE_CSE_KEY, "
-                "that its project has the Custom Search API enabled, and any key restrictions."
+                f"Tavily access denied (HTTP {status}) — check TAVILY_API_KEY."
             )
+        if status == 429:
+            raise ConnectorUnavailable("Tavily rate limit / quota exceeded (HTTP 429).")
         resp.raise_for_status()
         return resp.json()
 
-    def _to_card(self, item: dict) -> Card:
-        url = item.get("link", "")
-        pagemap = item.get("pagemap", {}) or {}
+    def _to_card(self, result: dict) -> Card:
+        url = result.get("url", "")
         return Card(
             source=self.source,
             external_id=_score_id(url),
             url=url,
-            title=_clean_title(item.get("title", "")) or None,
+            title=_clean_title(result.get("title", "")) or None,
             kind="listing",
-            thumbnail_url=_thumbnail(pagemap),
-            author=None,                     # uploader not reliably in the CSE result; TODO
+            thumbnail_url=_thumbnail(result),
+            author=None,                     # uploader not in the result; TODO(verify-live)
             metadata={
-                "snippet": item.get("snippet"),
-                "display_link": item.get("displayLink"),
-                # TODO(verify-live): parse instrumentation / arranger from title/pagemap.
+                "snippet": result.get("content"),
+                "tavily_score": result.get("score"),
             },
         )

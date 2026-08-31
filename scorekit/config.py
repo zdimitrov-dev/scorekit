@@ -14,8 +14,8 @@ class Settings:
     supabase_url: str = os.getenv("SUPABASE_URL", "")
     supabase_service_key: str = os.getenv("SUPABASE_SERVICE_KEY", "")
     youtube_api_key: str = os.getenv("YOUTUBE_API_KEY", "")
-    google_cse_id: str = os.getenv("GOOGLE_CSE_ID", "")
-    google_cse_key: str = os.getenv("GOOGLE_CSE_KEY", "")
+    # MuseScore (Phase 3) via the Tavily search API, restricted to musescore.com.
+    tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
     # IMSLP (Phase 2) is inert until enabled — confirm IMSLP's terms of use first.
     imslp_enabled: bool = os.getenv("IMSLP_ENABLED", "").strip().lower() in {
         "1", "true", "yes", "on",

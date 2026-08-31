@@ -27,7 +27,7 @@ class _FakeClient:
         self.status = status
         self.calls = 0
 
-    def get(self, url, params=None):
+    def post(self, url, headers=None, json=None):
         self.calls += 1
         return _Resp(self._payload, self.status)
 
@@ -43,25 +43,22 @@ class _DictCache:
         self.store[key] = value
 
 
-CFG = SimpleNamespace(google_cse_id="cx", google_cse_key="key")
+CFG = SimpleNamespace(tavily_api_key="tvly-test")
 
-CSE_RESP = {
-    "items": [
+TAVILY_RESP = {
+    "results": [
         {
             "title": "Clair de Lune Sheet music for Piano (Solo) | Musescore.com",
-            "link": "https://musescore.com/user/scores/6937591",
-            "displayLink": "musescore.com",
-            "snippet": "Download and print Clair de Lune ...",
-            "pagemap": {
-                "cse_thumbnail": [{"src": "https://tbn0/thumb.jpg"}],
-                "metatags": [{"og:image": "https://musescore.com/og.jpg"}],
-            },
+            "url": "https://musescore.com/user/scores/6937591",
+            "content": "Download and print Clair de Lune …",
+            "score": 0.93,
+            "images": ["https://musescore.com/thumb.png"],
         },
         {
-            "title": "Clair de Lune – Debussy | Musescore.com",
-            "link": "https://musescore.com/classicman/clair-de-lune-debussy",
-            "snippet": "...",
-            "pagemap": {},
+            "title": "Clair de Lune – Debussy",
+            "url": "https://musescore.com/classicman/clair-de-lune-debussy",
+            "content": "…",
+            "score": 0.71,
         },
     ]
 }
@@ -69,7 +66,6 @@ CSE_RESP = {
 
 def test_score_id():
     assert _score_id("https://musescore.com/user/scores/6937591") == "6937591"
-    # no /scores/<id> -> falls back to the URL without query/fragment
     assert _score_id("https://musescore.com/classicman/clair-de-lune?x=1#f") == \
         "https://musescore.com/classicman/clair-de-lune"
 
@@ -79,15 +75,15 @@ def test_clean_title():
         "Clair de Lune Sheet music for Piano (Solo)"
 
 
-def test_thumbnail_prefers_cse_thumbnail():
-    assert _thumbnail({"cse_thumbnail": [{"src": "a"}], "metatags": [{"og:image": "b"}]}) == "a"
-    assert _thumbnail({"metatags": [{"og:image": "b"}]}) == "b"
+def test_thumbnail_handles_string_and_object():
+    assert _thumbnail({"images": ["a"]}) == "a"
+    assert _thumbnail({"images": [{"url": "b"}]}) == "b"
     assert _thumbnail({}) is None
 
 
 def test_search_maps_results(monkeypatch):
     monkeypatch.setattr(musescore, "settings", CFG)
-    conn = MuseScoreConnector(client=_FakeClient(CSE_RESP), cache=_DictCache())
+    conn = MuseScoreConnector(client=_FakeClient(TAVILY_RESP), cache=_DictCache())
     cards = conn.search("Clair de Lune", limit=10)
 
     assert [c.external_id for c in cards] == [
@@ -99,42 +95,35 @@ def test_search_maps_results(monkeypatch):
     assert first.kind == "listing"
     assert first.title == "Clair de Lune Sheet music for Piano (Solo)"
     assert first.url == "https://musescore.com/user/scores/6937591"
-    assert first.thumbnail_url == "https://tbn0/thumb.jpg"
+    assert first.thumbnail_url == "https://musescore.com/thumb.png"
+    assert first.metadata["tavily_score"] == 0.93
+    assert cards[1].thumbnail_url is None
 
 
 def test_search_uses_cache(monkeypatch):
     monkeypatch.setattr(musescore, "settings", CFG)
-    client = _FakeClient(CSE_RESP)
+    client = _FakeClient(TAVILY_RESP)
     conn = MuseScoreConnector(client=client, cache=_DictCache())
     conn.search("Clair de Lune")
     conn.search("Clair de Lune")
-    assert client.calls == 1   # second query served from cache, no extra quota spent
+    assert client.calls == 1   # second query served from cache, no extra spend
 
 
 def test_disabled_raises_connector_unavailable(monkeypatch):
-    monkeypatch.setattr(musescore, "settings", SimpleNamespace(google_cse_id="", google_cse_key=""))
+    monkeypatch.setattr(musescore, "settings", SimpleNamespace(tavily_api_key=""))
     with pytest.raises(ConnectorUnavailable):
-        MuseScoreConnector(client=_FakeClient(CSE_RESP), cache=_DictCache()).search("x")
+        MuseScoreConnector(client=_FakeClient(TAVILY_RESP), cache=_DictCache()).search("x")
 
 
-def test_quota_exceeded_raises(monkeypatch):
-    monkeypatch.setattr(musescore, "settings", CFG)
-    conn = MuseScoreConnector(client=_FakeClient({}, status=429), cache=_DictCache())
-    with pytest.raises(ConnectorUnavailable):
-        conn.search("x")
-
-
-@pytest.mark.parametrize("status", [401, 403])
-def test_auth_error_is_skipped_not_crash(monkeypatch, status):
-    # a bad key / not-yet-provisioned project must skip (ConnectorUnavailable),
-    # never crash the whole ingest run
+@pytest.mark.parametrize("status", [401, 403, 429])
+def test_auth_or_quota_error_is_skipped(monkeypatch, status):
     monkeypatch.setattr(musescore, "settings", CFG)
     conn = MuseScoreConnector(client=_FakeClient({}, status=status), cache=_DictCache())
     with pytest.raises(ConnectorUnavailable):
         conn.search("x")
 
 
-def test_no_items_returns_empty(monkeypatch):
+def test_no_results_returns_empty(monkeypatch):
     monkeypatch.setattr(musescore, "settings", CFG)
     conn = MuseScoreConnector(client=_FakeClient({}), cache=_DictCache())
     assert conn.search("nothing here") == []

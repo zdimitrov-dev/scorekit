@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-31 · **Phase:** connectors (YouTube + IMSLP live; MuseScore blocked on Google CSE access); **Phase 4 feed UI (`web/`) with live streaming search — in progress** ·
+**Last updated:** 2026-08-31 · **Phase:** connectors (YouTube + IMSLP live; MuseScore switched to Tavily, needs a key); **Phase 4 feed UI (`web/`) with live streaming search — in progress** ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -17,7 +17,7 @@
 | Database schema (`db/schema.sql`) | ✅ Applied to live Supabase; RLS enabled on all tables |
 | Supabase project | ✅ Provisioned — schema applied, RLS on, `.env` filled & connection verified |
 | Docker image build | ⛔ Not built/verified yet |
-| Source connectors | 🟡 YouTube **live**; IMSLP **live** (search + enrichment, gated by `IMSLP_ENABLED`); MuseScore **framework laid** (Google CSE + cache, gated by `GOOGLE_CSE_*`) |
+| Source connectors | 🟡 YouTube **live**; IMSLP **live** (search + enrichment, gated by `IMSLP_ENABLED`); MuseScore **built on Tavily** (gated by `TAVILY_API_KEY`, needs a key) |
 | Attribution + enrichment | ✅ Match-scoring filter (`scorekit/matching.py`) + IMSLP enrichment (license, instrumentation, style, year) |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI (Phase 4) | 🟡 In progress — Next.js app in `web/` (masonry board, bottom nav, click-to-expand modal, like/save); reads Supabase server-side |
@@ -95,7 +95,7 @@ scorekit/
 │   └── schema.sql          # full Postgres schema + RLS (idempotent). Applied to Supabase.
 ├── scorekit/               # the Python package
 │   ├── __init__.py
-│   ├── config.py           # env-backed Settings (Supabase / YouTube / Google CSE)
+│   ├── config.py           # env-backed Settings (Supabase / YouTube / IMSLP / Tavily)
 │   ├── db.py               # cached Supabase client (get_client())
 │   ├── models.py           # Card, Piece, Interaction dataclasses (shared schema)
 │   ├── normalize.py        # normalize_slug() — the cross-source dedupe key. TESTED.
@@ -106,7 +106,7 @@ scorekit/
 │   │   ├── base.py         # Connector ABC (.source + .search) + ConnectorUnavailable
 │   │   ├── youtube.py      # Phase 1 — implemented, tested, live
 │   │   ├── imslp.py        # Phase 2 — search + work-page enrichment, gated by IMSLP_ENABLED
-│   │   └── musescore.py    # Phase 3 — framework (Google Custom Search + per-query cache), gated by GOOGLE_CSE_*
+│   │   └── musescore.py    # Phase 3 — Tavily search (site:musescore.com) + per-query cache, gated by TAVILY_API_KEY
 │   └── jobs/
 │       ├── __init__.py
 │       └── ingest.py       # CLI orchestrator: search → match-filter → enrich → persist
@@ -116,7 +116,7 @@ scorekit/
 │   ├── test_matching.py    # attribution match-scoring + filter
 │   ├── test_youtube.py     # YouTube parsing/enrichment + connector
 │   ├── test_imslp.py       # IMSLP parsing, enrichment, connector
-│   └── test_musescore.py   # MuseScore CSE mapping, cache, gate
+│   └── test_musescore.py   # MuseScore Tavily mapping, cache, gate
 └── web/                    # Phase 4 — Next.js feed app (App Router, Tailwind, framer-motion)
     ├── app/                # pages: / (home feed), /search, /settings
     ├── components/         # Feed, PieceCard, CardModal, BottomNav, SearchFeed
@@ -403,7 +403,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 | 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
 | 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
 | 2 | IMSLP connector | ✅ Live + enriched + **disambiguation resolution** (Option A), gated by `IMSLP_ENABLED` (terms confirmed). Open: per-movement labeling, thumbnails/PDF links |
-| 3 | MuseScore via Google Custom Search (`site:musescore.com`, cached) | 🟡 Framework laid (CSE connector + per-query TTL cache, unit-tested), gated & inert until `GOOGLE_CSE_*` set; needs a Programmable Search Engine + API key, then verify live |
+| 3 | MuseScore via Tavily search (`include_domains=musescore.com`, cached) | 🟡 Built + unit-tested, gated & inert until `TAVILY_API_KEY` set; then verify live. (Switched off Google CSE, which is closed to new projects.) |
 | 4 | Feed UI (mixed-card masonry) | 🟡 In progress — Next.js `web/`: masonry board, bottom nav, framer-motion expand modal, like/save (localStorage). Open: swipe, source-diversity ranking, live search→ingest |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
 | 6 | Recommendation engine / home feed | ⛔ |
@@ -464,19 +464,15 @@ a movement resolves to its **parent-work** page (Clair de lune is track 3 of the
 so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is stored).
 
 **Framework laid, inert (needs config):**
-- `scorekit/connectors/musescore.py` — **Phase 3 framework.** Google Custom Search JSON
-  API restricted to musescore.com → `kind="listing"` cards with preview thumbnails. Gated
-  by `GOOGLE_CSE_ID`/`GOOGLE_CSE_KEY` (raises `ConnectorUnavailable` until set). Per-query
-  TTL **file cache** protects the 100/day CSE quota; **401/403/429 → skip** (don't crash
-  the run). Unit-tested (`tests/test_musescore.py`). **Live blocked (Google-side) — persists
-  after days:** the API returns 403 "project does not have access to Custom Search JSON API"
-  despite the config being verified correct (API enabled in the key's project, key restricted
-  to Custom Search API, quota counting requests, disable/re-enable tried). Standard fixes are
-  exhausted, so this is no longer a provisioning lag — most likely an **org/account-level API
-  restriction** (the GCP project may be under an edu/Workspace org). Service accounts are
-  **not** supported for this API (API-key only). Next step: try a fresh **personal** GCP
-  project (outside any org) + a new key. The connector will work with zero code changes once a
-  working key is in place. Deferred: >10-result pagination, instrumentation parsing, DB cache.
+- `scorekit/connectors/musescore.py` — **Phase 3, gated by `TAVILY_API_KEY`.** Queries the
+  **Tavily search API** with `include_domains=["musescore.com"]` → `kind="listing"` cards.
+  Per-query TTL **file cache** stays within Tavily's free budget (~1,000/mo); auth/quota errors
+  (401/403/429) → skip. Unit-tested (`tests/test_musescore.py`); **not yet verified live**
+  (needs a key). *Why Tavily:* the original Google Custom Search JSON API is **closed to new
+  projects** (shutdown Jan 1 2027) — that was the persistent 403; Vertex AI Search is Google's
+  successor but enterprise-priced/complex, so Tavily (recurring free tier + native domain
+  filtering) was chosen. Produces cards with zero further code changes once a key is set.
+  Deferred: pagination, instrumentation parsing, DB-backed cache.
 
 **Stubbed / not started:**
 - IMSLP thumbnails & direct PDF links — served via IMSLP's hashed file system, not
@@ -542,8 +538,7 @@ docker compose run --rm ingest --query "Clair de Lune"
 | `SUPABASE_DB_URL` | Direct Postgres URI (used to apply schema) | Supabase → Settings → Database → Connection string (URI) |
 | `YOUTUBE_API_KEY` | YouTube Data API (Phase 1) | Google Cloud console |
 | `IMSLP_ENABLED` | Enable the IMSLP connector (Phase 2); inert until set (`1`/`true`). Confirm IMSLP terms first | no key needed (public MediaWiki API) |
-| `GOOGLE_CSE_ID` | Programmable Search Engine id (`cx`); enables the MuseScore connector | programmablesearchengine.google.com (site = musescore.com) |
-| `GOOGLE_CSE_KEY` | Custom Search API key (both CSE vars required) | Google Cloud console → enable "Custom Search API" → API key |
+| `TAVILY_API_KEY` | Enables the MuseScore connector (Phase 3); inert until set | tavily.com — free tier ~1,000 searches/month |
 
 ---
 

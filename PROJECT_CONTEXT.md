@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-28 · **Phase:** connectors (YouTube live; IMSLP live+enriched; MuseScore framework); attribution + enrichment in; **Phase 4 feed UI (`web/`) in progress** ·
+**Last updated:** 2026-08-31 · **Phase:** connectors (YouTube + IMSLP live; MuseScore blocked on Google CSE access); **Phase 4 feed UI (`web/`) with live streaming search — in progress** ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -59,7 +59,8 @@ Piano learners face a two-part discovery gap no single tool covers:
 
 ## 3. Tech stack & architecture
 
-- **Backend:** Python 3.13, scheduled ingestion jobs per source.
+- **Backend:** Python 3.13 — the ingestion pipeline per source, plus a **FastAPI HTTP API**
+  (`scorekit/api.py`) the frontend calls for live/streaming search.
 - **Storage:** Supabase (managed Postgres).
 - **Containerization:** Docker (`Dockerfile` + `docker-compose.yml`).
 - **Frontend (later, Phase 4+):** Pinterest-style masonry feed, swipe like/skip.
@@ -467,13 +468,15 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
   API restricted to musescore.com → `kind="listing"` cards with preview thumbnails. Gated
   by `GOOGLE_CSE_ID`/`GOOGLE_CSE_KEY` (raises `ConnectorUnavailable` until set). Per-query
   TTL **file cache** protects the 100/day CSE quota; **401/403/429 → skip** (don't crash
-  the run). Unit-tested (`tests/test_musescore.py`). **Live blocked (Google-side):** keys
-  are set but the API returns 403 "project does not have access to Custom Search JSON API"
-  — a provisioning lag on the newly-enabled API (config verified correct: enabled in the
-  key's project, key restricted to Custom Search API, quota counting requests). Service
-  accounts are **not** supported for this API (API-key only), so that's not an alternative;
-  it should start working once Google finishes provisioning. Deferred: >10-result
-  pagination, instrumentation/arranger parsing, DB-backed cache (file cache is single-machine).
+  the run). Unit-tested (`tests/test_musescore.py`). **Live blocked (Google-side) — persists
+  after days:** the API returns 403 "project does not have access to Custom Search JSON API"
+  despite the config being verified correct (API enabled in the key's project, key restricted
+  to Custom Search API, quota counting requests, disable/re-enable tried). Standard fixes are
+  exhausted, so this is no longer a provisioning lag — most likely an **org/account-level API
+  restriction** (the GCP project may be under an edu/Workspace org). Service accounts are
+  **not** supported for this API (API-key only). Next step: try a fresh **personal** GCP
+  project (outside any org) + a new key. The connector will work with zero code changes once a
+  working key is in place. Deferred: >10-result pagination, instrumentation parsing, DB cache.
 
 **Stubbed / not started:**
 - IMSLP thumbnails & direct PDF links — served via IMSLP's hashed file system, not
@@ -491,11 +494,17 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
 - Fixed **top bar** (wordmark left, profile menu right — the menu holds Sign-in stub,
   Your profile, Saved, Settings) and fixed **bottom nav** (Home / Search / Saved). Pages:
   `/` = the **home / recommendation feed** (mixed board of everything, stand-in for the
-  Phase 6 recommender); `/search` filters loaded cards and **separates YouTube (the
-  centerpiece masonry board) from a slide-out one-column *scores* drawer** (IMSLP +
-  MuseScore, framer-motion, in-page, own scroll, pushes the board left on large screens);
-  `/favorites` (liked+saved from localStorage), `/profile` (scaffold), `/settings` (stub).
-  Ordering: relevance (`match_score`) then `view_count`.
+  Phase 6 recommender). `/search` runs a **live search** — it submits to the API, which
+  ingests the piece on demand (cached pieces return instantly) and **streams results per
+  source (NDJSON)** so cards roll out as they arrive (videos first, then scores). It
+  **separates YouTube (the centerpiece masonry board) from a slide-out one-column *scores*
+  drawer** (IMSLP + MuseScore, in-page, own scroll, pushes the board left on large screens),
+  with **sort controls** (Best match / Most viewed / Newest). `/favorites` (liked+saved
+  from localStorage), `/profile` (scaffold), `/settings` (stub).
+- **API (`scorekit/api.py`, FastAPI):** `GET /search` (blocking) and `GET /search/stream`
+  (NDJSON per-source batches, each persisted before streaming). The Next route
+  `/api/search` proxies the stream server-to-server. Run: `uvicorn scorekit.api:app --port 8000`
+  (`web/.env.local` `SCOREKIT_API_URL` points at it; defaults to `http://localhost:8000`).
 - Click-to-expand modal via framer-motion shared `layoutId`: the card morphs to cover
   most of the page (content left, info right — title link, sheet link, badges, placeholder
   comments, Like/Save via localStorage), and the X animates it back.
@@ -558,8 +567,10 @@ docker compose run --rm ingest --query "Clair de Lune"
 - **Feed source diversity** — the feed sorts by relevance then popularity, which clusters
   the high-view YouTube cards first and pushes IMSLP score cards to the end. A
   source-diversity / interleave re-rank would make the board feel more mixed.
-- **Live search → ingestion** — search currently filters cards already in the DB; wiring a
-  query to trigger the ingest pipeline (and show a mixed board for a brand-new piece) is open.
+- **Live search → ingestion** — ✅ done: `/search` submits to the FastAPI, which ingests a
+  brand-new piece on demand and streams results per source. Remaining polish: the freeform
+  query is slugged as-is (so "Clair de Lune" and "Debussy Clair de Lune" are different
+  pieces); a composer field or fuzzy piece-matching would unify them.
 - **Auth for like/save + interactions** — likes/saves persist to `localStorage` for now.
   Wiring them (and swipe logging, Phase 5) to Supabase needs the `users` table / auth.
 - **Reads via service key vs public RLS** — the feed reads server-side with the service

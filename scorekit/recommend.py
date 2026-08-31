@@ -41,22 +41,47 @@ POPULARITY_WEIGHT = 0.15
 
 # A board that is 20 cards of one piece is a worse feed than a slightly less "relevant"
 # one, so repeats of an already-shown piece/composer are penalised as the list is built.
-PIECE_PENALTY = 0.55
-COMPOSER_PENALTY = 0.25
+# Sized against the score range rather than tuned small: a repeat has to be *much* better
+# than an unseen piece to take the slot, which in practice means the feed works through
+# the corpus before doubling back. A gentler penalty let a strongly-matching piece take
+# consecutive slots and the board stopped looking like a feed.
+PIECE_PENALTY = 1.0
+COMPOSER_PENALTY = 0.35
+
+
+# How much each kind of tag expresses *taste*, independent of how rare it happens to be.
+# IDF alone measures rarity, which is not the same thing and is unstable on a small
+# corpus: two pieces sharing a composer are alike in a way two pieces that merely both
+# involve a piano are not — and in piano repertoire nearly everything involves a piano.
+# Without this, a heterogeneous "piece" that accumulated many incidental tags matched
+# every profile through low-information overlap and outranked genuinely similar works.
+KEY_WEIGHTS: dict[str, float] = {
+    "composer": 1.0,
+    "creator": 1.0,   # for artist entries, the channel is the whole point
+    "era": 0.9,
+    "form": 0.7,
+    "style": 0.4,
+    "instrumentation": 0.25,
+    "public_domain": 0.1,
+}
+DEFAULT_KEY_WEIGHT = 0.5
 
 
 def idf_weights(piece_tags: dict[str, list[tuple[str, str]]]) -> dict[tuple[str, str], float]:
-    """Inverse-document-frequency weight per tag across the corpus.
+    """Per-tag weight: how *rare* it is (IDF) scaled by how much its kind matters.
 
-    Without this, ``public_domain=true`` — which nearly every piece carries — would swamp
-    ``composer=chopin``, which is the tag that actually expresses taste. Rare tags are
-    informative; ubiquitous ones are not.
+    Without the IDF half, ``public_domain=true`` — which nearly every piece carries —
+    would count as much as ``composer=chopin``. Without the ``KEY_WEIGHTS`` half, a tag
+    that is rare only because the corpus is small counts as though it were meaningful.
     """
     n = len(piece_tags) or 1
     counts: Counter[tuple[str, str]] = Counter()
     for tags in piece_tags.values():
         counts.update(set(tags))
-    return {tag: math.log(1 + n / (1 + c)) for tag, c in counts.items()}
+    return {
+        tag: math.log(1 + n / (1 + c)) * KEY_WEIGHTS.get(tag[0], DEFAULT_KEY_WEIGHT)
+        for tag, c in counts.items()
+    }
 
 
 def build_profile(

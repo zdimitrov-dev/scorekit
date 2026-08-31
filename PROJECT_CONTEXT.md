@@ -262,13 +262,24 @@ Three lessons are baked into it, each found by running it over the real corpus:
 - **A value needs corroboration** (≥2 cards) unless the piece's own title says it. One
   ragtime cover or one orchestral transcription must not redefine the work.
 
+A fourth rule came from testing artist queries: **a dominant YouTube channel becomes a
+`creator` tag.** Searching "Patrik Pietschmann" produces a piece with no composer, era or
+form, which carried *no features at all* and could never influence the feed however often
+it was liked. A channel holding ≥50% of a piece's videos (min 3) is what that entry is
+about, so it is tagged as such; a normal spread of performers yields no `creator`.
+
 **Ranking (`scorekit/recommend.py`, endpoint: `POST /recommend`).** Four steps:
 profile → score → blend → diversify.
 - **Profile:** liked/saved pieces become a weighted tag vector. `save` (1.5) outweighs
   `like` (1.0); `skip` is the negative (−0.8) — there is no dislike button. The vector is
   L2-normalised so a heavy user isn't compared on a different scale to a new one.
-- **Score:** tag affinity, with **IDF weighting** so `public_domain=true` (which nearly
-  every piece has) can't drown out `composer=chopin` (which actually expresses taste).
+- **Score:** tag affinity weighted by **IDF × `KEY_WEIGHTS`**. IDF measures rarity;
+  `KEY_WEIGHTS` measures what a *kind* of tag says about taste, and the two are not the
+  same. Sharing a composer means far more than sharing an instrument — and in piano
+  repertoire almost everything involves a piano. With IDF alone, a heterogeneous entry
+  that had accumulated many incidental tags (the "Rousseau" artist search, 15 tags)
+  matched every profile through low-information overlap and outranked genuine neighbours:
+  liking Debussy surfaced it above Satie, who shares the era.
 - **Blend:** a small popularity prior (`POPULARITY_WEIGHT = 0.15`, log-scaled views) so a
   thin profile still ranks sensibly. Taste dominates by design.
 - **Diversify:** a greedy MMR pass penalising already-shown pieces and composers, so the
@@ -277,12 +288,27 @@ profile → score → blend → diversify.
 Every returned card carries a `metadata.rec` breakdown (`affinity`, `popularity`,
 `score`) so the ordering can be explained and debugged instead of being opaque.
 
+- **Diversify:** `PIECE_PENALTY` is sized against the score range, not tuned small, so a
+  repeat has to be *much* better than an unseen piece to take the slot. A gentler penalty
+  let one strongly-matching piece take consecutive slots and the board stopped reading
+  like a feed.
+
+**Tagging runs at ingest, not only as a batch job.** `store.retag_piece()` is called per
+source inside `_ingest_stream` (per source rather than once at the end, since a client
+disconnecting mid-stream would otherwise leave a piece ingested but untagged). Leaving it
+to the batch job meant every piece searched since the last run had zero affinity and was
+silently unrecommendable — which is what made a freshly-searched Liszt piece impossible to
+promote no matter how many of its cards were liked.
+
 **Current limitation — where the signals come from.** `POST /recommend` takes signals in
 the request body because likes/saves still live in `localStorage` (auth is Phase 5). The
 ranker is indifferent to their origin, so switching to the `interactions` table is a
-change in `api.py` only, not in the algorithm. Verified live: liking a Bach prelude lifts
-Pachelbel's Canon (baroque) to the top; liking a Chopin nocturne puts all three
-Chopin/nocturne pieces first at affinity 1.00.
+change in `api.py` only, not in the algorithm.
+
+Verified end-to-end through the UI on a corpus rebuilt from scratch: liking a Chopin
+nocturne makes **Liszt's La Campanella** the top card on the home feed (nearest romantic
+neighbour, with the liked piece itself held back); liking Debussy surfaces Satie; skipping
+Bach drives it to −1.00 affinity.
 
 ---
 
@@ -543,12 +569,20 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
   projects** (shutdown Jan 1 2027) — that was the persistent 403; Vertex AI Search is Google's
   successor but enterprise-priced/complex, so Tavily (recurring free tier + native domain
   filtering) was chosen. Deferred: pagination, instrumentation parsing, DB-backed cache.
-  - **Thumbnails:** a result's `images` are just everything scraped off the listing page —
-    mostly the "Pro" sale banner, app-store badges and ad pixels. Only the entry matching
-    `/scoredata/g/<hash>/score_0` is the engraving, and its `musescore.com/static/...` URL
-    **403s when hotlinked**, so `_thumbnail` rebuilds the hash into a sized CDN URL
-    (`cdn.ustatik.com/...score_0.png@600x840`). No scoredata image → `None` → the feed's own
-    titled tile, which beats showing a promo banner.
+  - **Thumbnails (~90% coverage, measured over 107 cards).** A result's `images` are just
+    everything scraped off the listing page — mostly the "Pro" sale banner, app-store
+    badges and ad pixels. Only the entry matching `/scoredata/g/<hash>/score_0` is the
+    engraving, and its `musescore.com/static/...` URL **403s when hotlinked**, so
+    `_thumbnail` rebuilds the hash into a sized CDN URL
+    (`cdn.ustatik.com/...score_0.png@600x840`). Three sources are tried in order, because
+    `images` alone finds it only about a third of the time: `images` → `raw_content` (page
+    HTML Tavily already fetched) → one batched `/extract` call at `advanced` depth for
+    whatever is still missing. MuseScore answers *our* direct requests with 403, so we
+    never fetch the page — extract goes through Tavily's own infrastructure. Still
+    `None` → the feed's titled tile, which beats showing a promo banner.
+  - `CACHE_VERSION` is part of the query cache key. Improved extraction was otherwise
+    masked for 30 days by entries built with the older logic: coverage stayed at ~20% on
+    every already-cached query until this existed.
 
 **Framework laid, inert (needs config):**
 
@@ -584,6 +618,15 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
   null: an image that errors (dead/hotlink-blocked) or loads below 160×120 is treated as
   absent, so a stamp-sized or broken image never lands in a masonry column.
 
+**Not every query names a piece.** `match_score` also scores the query against the card's
+**author**, but only when the whole query appears contiguously in it. Searching an artist
+("Birru", "Rousseau", "Patrik Pietschmann") returns that channel's uploads, whose titles
+never contain the artist's name — scoring titles alone gave all of them 0.0 and the filter
+discarded a perfect result set. The all-or-nothing rule keeps the filter's precision: a
+partial overlap with a channel name ("Piano Sonata" against "Piano Tutorials") is noise
+and cannot rescue a card the title rejected. Verified live: a cold "Patrik Pietschmann"
+search returns 23 of 24 cards from that channel.
+
 **Search caching (`_ingest_stream`) — cache on cards, per source, never on the piece row.**
 The stream used to decide "already ingested" from the existence of the *piece* row, so a piece
 whose ingest stored nothing (connector down, out of quota, or rows removed later) became a
@@ -593,6 +636,19 @@ actually have cards and ingests the rest, which also lets a source that was unav
 first search fill itself in later. Regression-tested in `tests/test_api_stream.py`. Retrying a
 missing source is cheap in practice (YouTube is effectively never missing, IMSLP is free, and
 Tavily repeats hit the local file cache), so no attempt-tracking column was added.
+
+Cards also carry `metadata.mv` (`matching.MATCHER_VERSION`), and a source whose cards were
+scored by superseded matching is re-ingested rather than replayed. **Dropped cards are
+never stored**, so a scoring fix cannot be applied by re-scoring the database — the results
+it should now keep were discarded at ingest, and only a re-fetch recovers them. Bump
+`MATCHER_VERSION` whenever scoring changes *which* cards are kept. Without it, adding
+author matching fixed artist queries for new searches while an already-cached "Birru" went
+on returning the single wrong card it had matched by title.
+
+**Masonry uses explicit columns, not CSS `columns-*`.** CSS multi-column re-flows its whole
+content when items are appended, so "Load more" visually reshuffled every card on screen.
+`Feed` assigns each card to the measurably shortest column once and never moves it;
+verified with 0 of 72 cards changing position across a Load more.
 - **API (`scorekit/api.py`, FastAPI):** `GET /search` (blocking) and `GET /search/stream`
   (NDJSON per-source batches, each persisted before streaming). The Next route
   `/api/search` proxies the stream server-to-server (`web/.env.local` `SCOREKIT_API_URL`

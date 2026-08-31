@@ -196,26 +196,37 @@ def _infer_composer(piece: dict[str, Any], cards: list[dict[str, Any]]) -> str |
       names the arranger — which is how "Moonlight Sonata" first came out as the composer
       of a guitar transcription of it.
 
-    Titles win when they agree at all, and a lone IMSLP author is only trusted when at
-    least two cards corroborate it. No confident answer means no tag: a wrong composer is
-    worse than a missing one, since every era and similarity judgement builds on it.
+    The piece's own title is taken on trust when it names a composer, since that is what
+    was actually searched for. Otherwise a name must appear on **two** cards: a single
+    incidental mention is not evidence, and an artist search for "Birru" was assigned
+    Liszt off one video called "i hear a symphony if liszt composed it". No confident
+    answer means no tag — a wrong composer is worse than a missing one, because every era
+    and similarity judgement is built on it.
     """
     if piece.get("composer"):
         return piece["composer"]
 
-    titles: Counter[str] = Counter()
-    authors: Counter[str] = Counter()
-    for c in cards:
-        for token in re.findall(r"[a-z]+", _norm(c.get("title") or "")):
-            if token in _COMPOSER_ERA:
-                titles[token] += 1
-        if c.get("source") == "imslp" and c.get("author"):
-            authors[_surname(c["author"])] += 1
+    in_title = [
+        t for t in re.findall(r"[a-z]+", _norm(piece.get("title") or ""))
+        if t in _COMPOSER_ERA
+    ]
+    if in_title:
+        return in_title[0]
 
-    if titles:
-        return titles.most_common(1)[0][0]
-    if authors:
-        name, count = authors.most_common(1)[0]
+    # One merged tally: a name carried by a card title *and* an IMSLP author is two
+    # independent pieces of evidence, and siloing them meant Debussy — named once each
+    # way — cleared neither bar. Only IMSLP authors are counted; a YouTube channel is the
+    # performer, and tagging it as the composer would poison the feature outright.
+    votes: Counter[str] = Counter()
+    for c in cards:
+        for token in set(re.findall(r"[a-z]+", _norm(c.get("title") or ""))):
+            if token in _COMPOSER_ERA:
+                votes[token] += 1
+        if c.get("source") == "imslp" and c.get("author"):
+            votes[_surname(c["author"])] += 1
+
+    if votes:
+        name, count = votes.most_common(1)[0]
         if count >= 2:
             return name
     return None
@@ -271,6 +282,21 @@ def derive_tags(piece: dict[str, Any], cards: Iterable[dict[str, Any]]) -> set[t
     # What the piece title itself says is taken on trust — it is the work's own name.
     for form in _forms_in(piece.get("title") or "") | set(_corroborated(forms)):
         tags.add(("form", form))
+
+    # --- creator ------------------------------------------------------------
+    # When one channel accounts for most of a piece's videos, that channel *is* what the
+    # entry is about — an artist search ("Patrik Pietschmann") produces exactly this. Such
+    # a piece has no composer, era or form to speak of, so without this it carries no
+    # features at all and is invisible to the recommender no matter how often it is liked.
+    # Requires dominance, so a piece with a normal spread of performers gets no creator.
+    channels = Counter(
+        _norm(c["author"]) for c in cards
+        if c.get("source") == "youtube" and c.get("author")
+    )
+    if channels:
+        name, count = channels.most_common(1)[0]
+        if count >= 3 and count / sum(channels.values()) >= 0.5:
+            tags.add(("creator", name))
 
     # --- licensing ----------------------------------------------------------
     if any((c.get("metadata") or {}).get("is_public_domain") for c in strong):

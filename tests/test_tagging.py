@@ -132,11 +132,27 @@ def test_composer_vote_survives_a_derivative_works_arranger():
 def test_lone_imslp_author_is_not_trusted_without_corroboration():
     piece = {"title": "Chopin Nocturne", "composer": None}
     cards = [_card(source="imslp", author="Édouard Wolff", title="Homage à Chopin")]
-    # "chopin" is a known composer named in the title, so it outvotes the lone author
+    # the piece's own title names Chopin, which outranks a lone IMSLP author
     assert ("composer", "chopin") in derive_tags(piece, cards)
 
-    unknown = [_card(source="imslp", author="Édouard Wolff", title="Some Obscure Work")]
-    assert not any(k == "composer" for k, _ in derive_tags(piece, unknown))
+    unnamed = {"title": "Some Search", "composer": None}
+    assert not any(k == "composer" for k, _ in derive_tags(unnamed, cards))
+
+
+def test_a_single_incidental_mention_does_not_name_a_composer():
+    """Regression: searching the artist "Birru" tagged the result Liszt, off one video
+    titled "i hear a symphony if liszt composed it"."""
+    piece = {"title": "Birru", "composer": None}
+    cards = [
+        _card(source="youtube", title="i hear a symphony if liszt composed it"),
+        _card(source="youtube", title="glimpse of us if chopin composed it"),
+        _card(source="youtube", title="the part of hamnet where you cry"),
+    ]
+    assert not any(k == "composer" for k, _ in derive_tags(piece, cards))
+
+    # two mentions of the same name *is* evidence
+    cards.append(_card(source="youtube", title="clair de lune if liszt composed it"))
+    assert ("composer", "liszt") in derive_tags(piece, cards)
 
 
 def test_a_lone_arrangement_does_not_redefine_the_work():
@@ -173,6 +189,29 @@ def test_public_domain_when_any_card_is_free():
         piece, [_card(is_public_domain=False), _card(is_public_domain=True)]
     )
     assert ("public_domain", "true") not in derive_tags(piece, [_card(is_public_domain=False)])
+
+
+def test_a_dominant_channel_becomes_the_creator_tag():
+    # an artist search has no composer/era/form to speak of; without this it carries no
+    # features at all and liking it can never influence the feed
+    piece = {"title": "Patrik Pietschmann", "composer": None}
+    cards = [
+        _card(source="youtube", author="Patrik Pietschmann", title="DUNE - Main Theme"),
+        _card(source="youtube", author="Patrik Pietschmann", title="Interstellar"),
+        _card(source="youtube", author="Patrik Pietschmann", title="Phoenix"),
+        _card(source="youtube", author="Peterson Piano Academy", title="Reacting to Patrik"),
+    ]
+    assert ("creator", "patrik pietschmann") in derive_tags(piece, cards)
+
+
+def test_a_normal_spread_of_performers_yields_no_creator():
+    piece = {"title": "Clair de Lune", "composer": "Debussy"}
+    cards = [
+        _card(source="youtube", author="Rousseau", title="Clair de Lune"),
+        _card(source="youtube", author="Kassia", title="Clair de Lune"),
+        _card(source="youtube", author="Lang Lang", title="Clair de Lune"),
+    ]
+    assert not any(k == "creator" for k, _ in derive_tags(piece, cards))
 
 
 def test_bare_piece_produces_no_tags_rather_than_junk():

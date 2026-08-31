@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from scorekit import api
+from scorekit.matching import MATCHER_VERSION
 from scorekit.models import Card
 
 
@@ -60,14 +61,24 @@ def wiring(monkeypatch):
 
     monkeypatch.setattr(api, "get_client", lambda: SimpleNamespace(table=lambda t: _Q(t)))
     monkeypatch.setattr(api, "upsert_piece", lambda piece: "piece-1")
+    monkeypatch.setattr(api, "retag_piece", lambda piece_id: 0)
 
     def _upsert_cards(piece_id, cards):
         for c in cards:
-            stored[c.source].append({"id": c.external_id, "source": c.source, "title": c.title})
+            stored[c.source].append({
+                "id": c.external_id, "source": c.source, "title": c.title,
+                "metadata": c.metadata,
+            })
         return len(cards)
 
     monkeypatch.setattr(api, "upsert_cards", _upsert_cards)
     return SimpleNamespace(stored=stored, pieces=pieces, monkeypatch=monkeypatch)
+
+
+def _cached(source: str, ext: str, title: str, mv: int | None = MATCHER_VERSION) -> dict:
+    """A stored card row, scored by matcher version ``mv`` (None = pre-versioning)."""
+    meta = {"match_score": 1.0} if mv is None else {"match_score": 1.0, "mv": mv}
+    return {"id": ext, "source": source, "title": title, "metadata": meta}
 
 
 def _connectors(wiring, **by_source: list[Card]) -> dict[str, _FakeConnector]:
@@ -90,9 +101,9 @@ def test_cached_piece_with_no_cards_is_reingested(wiring):
 
 def test_cached_piece_replays_without_calling_connectors(wiring):
     wiring.pieces.append({"id": "piece-1"})
-    wiring.stored["youtube"].append({"id": "v1", "source": "youtube", "title": "Cached"})
-    wiring.stored["imslp"].append({"id": "p1", "source": "imslp", "title": "Cached score"})
-    wiring.stored["musescore"].append({"id": "m1", "source": "musescore", "title": "Cached listing"})
+    wiring.stored["youtube"].append(_cached("youtube", "v1", "Cached"))
+    wiring.stored["imslp"].append(_cached("imslp", "p1", "Cached score"))
+    wiring.stored["musescore"].append(_cached("musescore", "m1", "Cached listing"))
     conns = _connectors(wiring, youtube=[_card("youtube", "v2", "Fresh")])
 
     batches = list(api._ingest_stream("Op 48 No 1", None, 25, refresh=False))
@@ -105,7 +116,7 @@ def test_only_the_missing_source_is_ingested(wiring):
     """A source that was unavailable on the first search fills in on a later one,
     without re-spending quota on the sources that already have cards."""
     wiring.pieces.append({"id": "piece-1"})
-    wiring.stored["youtube"].append({"id": "v1", "source": "youtube", "title": "Cached"})
+    wiring.stored["youtube"].append(_cached("youtube", "v1", "Cached"))
     conns = _connectors(
         wiring,
         youtube=[_card("youtube", "v2", "Fresh")],
@@ -118,3 +129,29 @@ def test_only_the_missing_source_is_ingested(wiring):
     assert conns["musescore"].calls == 1        # missing, ingested
     titles = [c["title"] for b in batches for c in b]
     assert titles == ["Cached", "Nocturne Op.48 No.1"]
+
+
+def test_cards_scored_by_superseded_matching_are_reingested(wiring):
+    """Regression: adding author matching fixed artist queries for new searches, while
+    an already-cached "Birru" kept returning the single wrong card it matched by title.
+    Dropped cards are never stored, so only a re-fetch can recover the right ones."""
+    wiring.pieces.append({"id": "piece-1"})
+    wiring.stored["youtube"].append(_cached("youtube", "old", "Interstellar - Birru", mv=None))
+    conns = _connectors(wiring, youtube=[_card("youtube", "v1", "clair de lune but it's 3am")])
+    conns["youtube"]._cards[0].author = "Birru"
+
+    batches = list(api._ingest_stream("Birru", None, 25, refresh=False))
+
+    assert conns["youtube"].calls == 1
+    assert "clair de lune but it's 3am" in [c["title"] for b in batches for c in b]
+
+
+def test_current_version_cards_are_still_replayed(wiring):
+    wiring.pieces.append({"id": "piece-1"})
+    wiring.stored["youtube"].append(_cached("youtube", "v1", "Cached", mv=MATCHER_VERSION))
+    wiring.stored["imslp"].append(_cached("imslp", "p1", "Cached score"))
+    wiring.stored["musescore"].append(_cached("musescore", "m1", "Cached listing"))
+    conns = _connectors(wiring, youtube=[_card("youtube", "v2", "Fresh")])
+
+    list(api._ingest_stream("Op 48 No 1", None, 25, refresh=False))
+    assert conns["youtube"].calls == 0

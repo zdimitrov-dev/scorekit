@@ -28,6 +28,17 @@ from .models import Card
 # without excluding lesser or related works, which survive at a lower score.
 DROP_THRESHOLD = 0.35
 
+# Bump whenever scoring changes in a way that alters *which* cards are kept.
+#
+# Dropped cards are never stored, so a scoring fix cannot be applied by re-scoring what is
+# in the database — the results it should now keep were thrown away at ingest and only a
+# re-fetch can recover them. Stamping the version on every card lets the search cache spot
+# results produced by superseded scoring and re-ingest that source instead of replaying
+# them forever. Without it, a query searched before a fix keeps its old, worse results
+# permanently: adding author matching fixed "Birru" for new queries while the already-
+# cached "Birru" went on returning the single wrong card it had matched by title.
+MATCHER_VERSION = 2
+
 
 def _tokens(text: str) -> list[str]:
     text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
@@ -56,16 +67,32 @@ def _longest_run(needle: list[str], haystack: list[str]) -> int:
     return best
 
 
-def match_score(card: Card, query: str, composer: str | None = None) -> float:
-    """Score in [0, 1] for how well ``card`` matches the intended piece.
+def _text_score(q: list[str], text: list[str]) -> float:
+    """Blend *which* query words appear (overlap) with *how much of the query is
+    reproduced in order* (longest contiguous run), the latter weighted higher because
+    word order carries the phrase. A full-phrase hit scores 1.0."""
+    if not text:
+        return 0.0
+    overlap = len(set(q) & set(text)) / len(set(q))
+    run = _longest_run(q, text) / len(q)
+    return 0.4 * overlap + 0.6 * run
 
-    - **title**: blends *which* query words the card has (overlap) with *how much of
-      the query it reproduces in order* (longest contiguous run), the latter weighted
-      higher because word order carries the phrase. A full-phrase hit scores 1.0 and
-      outranks "Au clair de la lune", which has the words but not the phrase.
-    - **composer**: a boost when the composer surname appears in the card title or
-      author. For IMSLP the author *is* the composer, so this reliably lifts the
-      real work above same-name works by other composers — without dropping them.
+
+def match_score(card: Card, query: str, composer: str | None = None) -> float:
+    """Score in [0, 1] for how well ``card`` matches what was searched for.
+
+    - **title**: the phrase blend above, so an exact hit outranks "Au clair de la lune",
+      which has the words *clair/de/lune* but not the phrase.
+    - **author**: a narrow escape hatch for queries that name an *artist* rather than a
+      piece. Searching "Birru" returns that channel's uploads, whose titles never contain
+      "Birru" — scoring titles alone gave all nine results 0.0 and the filter discarded a
+      perfect result set. It counts **only when the whole query appears contiguously in
+      the author**, so it cannot erode the filter's precision: a partial overlap with a
+      channel name ("Piano Sonata" against a channel called "Piano Tutorials") is noise
+      and is ignored, leaving the title the sole judge exactly as before.
+    - **composer**: a boost when the composer surname appears in either field. For IMSLP
+      the author *is* the composer, so this lifts the real work above same-name works by
+      other composers — without dropping them.
 
     The blend is deliberately continuous rather than bucketed: a flat score makes the
     feed's "Best match" ordering degenerate into whatever the tiebreak is.
@@ -75,9 +102,7 @@ def match_score(card: Card, query: str, composer: str | None = None) -> float:
         return 0.0
     ct = _tokens(card.title or "")
 
-    overlap = len(set(q) & set(ct)) / len(set(q))
-    run = _longest_run(q, ct) / len(q)
-    title = 0.4 * overlap + 0.6 * run
+    title = _text_score(q, ct)
 
     # Opus / movement numbers are the most distinctive tokens in a classical title,
     # while the words around them (op, no, in) match everything. What matters is
@@ -95,15 +120,22 @@ def match_score(card: Card, query: str, composer: str | None = None) -> float:
             matched = len(q_nums & c_nums) / len(q_nums)
             title *= 0.1 + 0.9 * matched
 
+    # All-or-nothing by design (see docstring): the query either names this artist or it
+    # tells us nothing about them. Deliberately placed after the number rule — when the
+    # query *is* the artist, opus numbers in their video titles are irrelevant.
+    at = _tokens(card.author or "")
+    author = 1.0 if at and _longest_run(q, at) == len(q) else 0.0
+    base = max(title, author)
+
     composer_boost = 0.0
     if composer:
         toks = _tokens(composer)
         surname = toks[-1] if toks else ""
-        hay = set(ct) | set(_tokens(card.author or ""))
+        hay = set(ct) | set(at)
         if surname and surname in hay:
             composer_boost = 0.3
 
-    return round(min(1.0, title + composer_boost), 3)
+    return round(min(1.0, base + composer_boost), 3)
 
 
 def annotate_and_filter(
@@ -124,7 +156,12 @@ def annotate_and_filter(
     dropped = 0
     for rank, c in enumerate(cards):
         s = match_score(c, query, composer)
-        c.metadata = {**(c.metadata or {}), "match_score": s, "rank": rank}
+        c.metadata = {
+            **(c.metadata or {}),
+            "match_score": s,
+            "rank": rank,
+            "mv": MATCHER_VERSION,
+        }
         if s < drop_threshold:
             dropped += 1
             continue

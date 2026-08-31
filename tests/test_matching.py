@@ -65,6 +65,39 @@ def test_scores_are_granular_not_bucketed():
     assert len(set(scores)) == len(scores)
 
 
+def test_artist_query_matches_on_author():
+    """Regression: searching an artist returned nothing. YouTube gave nine correct Birru
+    uploads and the filter dropped all nine, because "Birru" is the channel and never
+    appears in a video title."""
+    cards = [
+        _card("just the way you are - bruno mars", author="Birru"),
+        _card("clair de lune but it's 3am", author="Birru"),
+        _card("the part of hamnet where you cry", author="Birru"),
+    ]
+    assert all(match_score(c, "Birru") == 1.0 for c in cards)
+    kept, dropped = annotate_and_filter(cards, "Birru")
+    assert (len(kept), dropped) == (3, 0)
+
+
+def test_author_match_requires_the_whole_query():
+    # a partial overlap with a channel name must NOT rescue a card the title rejected,
+    # or the filter loses the precision it exists for
+    c = _card("Beethoven — Moonlight Sonata", author="Piano Tutorials")
+    assert match_score(c, "Chopin Nocturne") == 0.0
+
+    # the composer's surname alone does not make every upload by them a phrase match
+    c = _card("Some Unrelated Work", author="Frédéric Chopin")
+    assert match_score(c, "Chopin Nocturne") < DROP_THRESHOLD
+
+
+def test_author_does_not_inflate_ordinary_piece_queries():
+    # scores for piece queries must be unchanged by the author path
+    performance = _card("Debussy - Clair de Lune", author="Rousseau")
+    assert match_score(performance, "Clair de Lune", "Debussy") == 1.0
+    lesser = _card("Au Clair de la Lune, Op.41", source="imslp", author="Jāzeps Vītols")
+    assert DROP_THRESHOLD <= match_score(lesser, "Clair de Lune", "Debussy") < 1.0
+
+
 def test_annotate_and_filter_records_source_rank():
     cards = [_card("Debussy - Clair de Lune"), _card("Clair de Lune (live)")]
     kept, _ = annotate_and_filter(cards, "Clair de Lune", "Debussy")

@@ -22,12 +22,17 @@ class _Resp:
 
 
 class _FakeClient:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, extract_payload=None):
         self._payload = payload
+        self._extract = extract_payload or {"results": []}
         self.status = status
-        self.calls = 0
+        self.calls = 0            # /search calls
+        self.extract_calls = 0    # /extract calls (the thumbnail second pass)
 
     def post(self, url, headers=None, json=None):
+        if url.endswith("/extract"):
+            self.extract_calls += 1
+            return _Resp(self._extract, 200)
         self.calls += 1
         return _Resp(self._payload, self.status)
 
@@ -89,6 +94,51 @@ def test_thumbnail_rebuilds_scoredata_url_via_cdn():
     assert _thumbnail({"images": [{"url": SCOREDATA}]}) == EXPECTED_THUMB
 
 
+def test_thumbnail_falls_back_to_raw_content():
+    # `images` finds the engraving on only ~a third of results; the page HTML Tavily
+    # already fetched carries it for many of the rest
+    html = f'<div><img src="{SCOREDATA}" class="score"></div>'
+    assert _thumbnail({"images": [PROMO], "raw_content": html}) == EXPECTED_THUMB
+
+
+def test_extract_pass_recovers_a_missing_thumbnail(monkeypatch):
+    # MuseScore 403s direct requests, so a listing whose search result carried no
+    # engraving is retried through Tavily's own fetcher rather than ours
+    monkeypatch.setattr(musescore, "settings", CFG)
+    second = "https://musescore.com/classicman/clair-de-lune-debussy"
+    client = _FakeClient(
+        TAVILY_RESP,
+        extract_payload={"results": [{"url": second, "raw_content": f'<img src="{SCOREDATA}">'}]},
+    )
+    cards = MuseScoreConnector(client=client, cache=_DictCache()).search("Clair de Lune")
+    assert client.extract_calls == 1
+    assert cards[1].thumbnail_url == EXPECTED_THUMB
+
+
+def test_extract_failure_leaves_the_tile_fallback(monkeypatch):
+    # the second pass is additive — a failure must never break the ingest
+    monkeypatch.setattr(musescore, "settings", CFG)
+
+    class _Boom(_FakeClient):
+        def post(self, url, headers=None, json=None):
+            if url.endswith("/extract"):
+                raise RuntimeError("tavily down")
+            return super().post(url, headers=headers, json=json)
+
+    cards = MuseScoreConnector(client=_Boom(TAVILY_RESP), cache=_DictCache()).search("x")
+    assert cards[0].thumbnail_url == EXPECTED_THUMB   # from the search result
+    assert cards[1].thumbnail_url is None             # falls back to the themed tile
+
+
+def test_raw_content_is_not_cached():
+    # whole pages for 20 results would bloat the query cache by megabytes per search
+    conn = MuseScoreConnector(client=_FakeClient(TAVILY_RESP), cache=_DictCache())
+    conn.search("Clair de Lune", limit=10)
+    cached = next(iter(conn.cache.store.values()))
+    assert all("raw_content" not in r for r in cached["results"])
+    assert cached["results"][0]["thumbnail"] == EXPECTED_THUMB
+
+
 def test_thumbnail_rejects_page_chrome():
     # promo banners / app badges are not previews — no thumbnail beats a wrong one
     assert _thumbnail({"images": [PROMO]}) is None
@@ -122,7 +172,16 @@ def test_search_uses_cache(monkeypatch):
     conn = MuseScoreConnector(client=client, cache=_DictCache())
     conn.search("Clair de Lune")
     conn.search("Clair de Lune")
-    assert client.calls == 1   # second query served from cache, no extra spend
+    assert client.calls == 1          # second query served from cache, no extra spend
+    assert client.extract_calls == 1  # and no second extract pass either
+
+
+def test_cache_key_is_versioned(monkeypatch):
+    # improved extraction must not stay masked by entries built with the older logic
+    monkeypatch.setattr(musescore, "settings", CFG)
+    cache = _DictCache()
+    MuseScoreConnector(client=_FakeClient(TAVILY_RESP), cache=cache).search("Clair de Lune")
+    assert all(f"v{musescore.CACHE_VERSION}" in k for k in cache.store)
 
 
 def test_disabled_raises_connector_unavailable(monkeypatch):

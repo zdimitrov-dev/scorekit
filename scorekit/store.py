@@ -10,6 +10,7 @@ from typing import Any
 
 from .db import get_client
 from .models import Card, Piece
+from .tagging import derive_tags, tag_rows
 
 
 def upsert_piece(piece: Piece, client: Any = None) -> str:
@@ -56,3 +57,32 @@ def upsert_cards(piece_id: str, cards: list[Card], client: Any = None) -> int:
     ]
     result = client.table("cards").upsert(rows, on_conflict="source,external_id").execute()
     return len(result.data)
+
+
+def retag_piece(piece_id: str, client: Any = None) -> int:
+    """Re-derive and replace this piece's ``piece_tags`` from its stored cards.
+
+    Called after every ingest, because tags are what the recommender ranks on: a piece
+    that is ingested but never tagged has zero affinity and is invisible to the home
+    feed no matter how many times the user likes it. Leaving tagging to the batch job
+    meant every piece searched since the last run was silently unrecommendable.
+
+    Replaces rather than merges, so re-running after a vocabulary change strands nothing.
+    """
+    client = client or get_client()
+    piece = (
+        client.table("pieces").select("id,title,composer").eq("id", piece_id)
+        .limit(1).execute().data
+    )
+    if not piece:
+        return 0
+    cards = (
+        client.table("cards").select("source,kind,title,author,metadata")
+        .eq("piece_id", piece_id).execute().data
+        or []
+    )
+    rows = tag_rows(piece_id, derive_tags(piece[0], cards))
+    client.table("piece_tags").delete().eq("piece_id", piece_id).execute()
+    if rows:
+        client.table("piece_tags").insert(rows).execute()
+    return len(rows)

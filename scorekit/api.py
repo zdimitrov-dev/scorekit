@@ -25,11 +25,11 @@ from .connectors import CONNECTORS
 from .connectors.base import ConnectorUnavailable
 from .db import get_client
 from .jobs.ingest import ingest
-from .matching import annotate_and_filter
+from .matching import MATCHER_VERSION, annotate_and_filter
 from .models import Piece
 from .normalize import normalize_slug
 from .recommend import rank_cards
-from .store import upsert_cards, upsert_piece
+from .store import retag_piece, upsert_cards, upsert_piece
 
 log = logging.getLogger("scorekit.api")
 
@@ -88,7 +88,12 @@ def _ingest_stream(q: str, composer: str | None, limit: int, refresh: bool) -> I
         pid = existing[0]["id"]
         for source in _SOURCES:
             batch = _read_source(sb, pid, source)
-            if batch:
+            # Cards scored by superseded matching are re-ingested rather than replayed:
+            # the results the current scoring would keep were dropped before being
+            # stored, so only a re-fetch can recover them (see matching.MATCHER_VERSION).
+            if batch and all(
+                (c.get("metadata") or {}).get("mv") == MATCHER_VERSION for c in batch
+            ):
                 pending.remove(source)
                 yield batch
         if not pending:
@@ -110,6 +115,10 @@ def _ingest_stream(q: str, composer: str | None, limit: int, refresh: bool) -> I
         if not kept:
             continue
         upsert_cards(piece_id, kept)
+        # Retag per source, not once at the end: this is a generator, so a client that
+        # disconnects mid-stream would otherwise leave the piece ingested but untagged —
+        # present in the corpus and invisible to the recommender.
+        retag_piece(piece_id)
         batch = _read_source(sb, piece_id, connector.source)
         if batch:
             yield batch

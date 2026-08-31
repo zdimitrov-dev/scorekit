@@ -40,6 +40,37 @@ def test_idf_downweights_ubiquitous_tags():
     assert w[("composer", "chopin")] < w[("composer", "bach")]  # chopin appears twice
 
 
+def test_taste_bearing_tag_kinds_outweigh_incidental_ones():
+    # equally rare tags are not equally meaningful: sharing a composer says far more
+    # than sharing an instrument, and in piano repertoire almost everything is piano
+    tags = {
+        "a": [("composer", "chopin"), ("instrumentation", "piano")],
+        "b": [("composer", "bach"), ("instrumentation", "organ")],
+    }
+    w = idf_weights(tags)
+    assert w[("composer", "chopin")] > w[("instrumentation", "piano")]
+
+
+def test_a_hairball_does_not_outrank_a_genuinely_similar_piece():
+    """Regression: a heterogeneous "piece" that had accumulated many incidental tags
+    matched every profile and outranked the real neighbour — liking Debussy surfaced it
+    above Satie, who shares the era."""
+    piece_tags = {
+        "debussy": [("composer", "debussy"), ("era", "impressionist"),
+                    ("instrumentation", "piano"), ("style", "romantic")],
+        "satie": [("composer", "satie"), ("era", "impressionist")],
+        "hairball": [("composer", "misc"), ("era", "romantic"), ("form", "waltz"),
+                     ("form", "prelude"), ("style", "romantic"), ("style", "classical"),
+                     ("instrumentation", "piano"), ("instrumentation", "violin"),
+                     ("instrumentation", "cello"), ("instrumentation", "voice"),
+                     ("public_domain", "true")],
+    }
+    cards = [_card(p, views=1000) for p in piece_tags]
+    ranked = rank_cards(cards, piece_tags, signals=[("debussy", "like")],
+                        exclude_piece_ids=["debussy"])
+    assert [c["piece_id"] for c in ranked][0] == "satie"
+
+
 def test_profile_is_normalised_regardless_of_signal_count():
     light = build_profile([("chopin-1", "like")], PIECE_TAGS)
     heavy = build_profile([("chopin-1", "like")] * 20, PIECE_TAGS)

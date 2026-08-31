@@ -4,6 +4,7 @@ export interface CardMeta {
   match_score?: number;
   composer?: string;
   view_count?: number;
+  published_at?: string;
   duration_seconds?: number;
   is_compilation?: boolean;
   is_remix?: boolean;

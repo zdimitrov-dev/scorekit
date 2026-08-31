@@ -83,7 +83,7 @@ export default function ScoresDrawer({
                 <p className="py-16 text-center text-sm text-[var(--muted)]">No scores found.</p>
               ) : (
                 scores.map((card, i) => (
-                  <PieceCard key={card.id} card={card} index={i} onSelect={onSelect} />
+                  <PieceCard key={card.id} card={card} index={i} onSelect={onSelect} compact />
                 ))
               )}
             </div>

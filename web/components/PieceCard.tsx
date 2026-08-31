@@ -1,6 +1,5 @@
 "use client";
 import { motion } from "framer-motion";
-import { FileMusic } from "lucide-react";
 import type { FeedCard, Source } from "@/lib/types";
 import { cleanInstrumentation } from "@/lib/format";
 
@@ -11,10 +10,12 @@ const SOURCE_STYLES: Record<Source, { label: string; cls: string }> = {
 };
 
 const PH_HEIGHTS = [180, 210, 240, 270, 200];
-function phHeight(id: string) {
+const PH_HEIGHTS_COMPACT = [128, 146, 164, 138, 154];
+function phHeight(id: string, compact = false) {
+  const set = compact ? PH_HEIGHTS_COMPACT : PH_HEIGHTS;
   let s = 0;
   for (let i = 0; i < id.length; i++) s += id.charCodeAt(i);
-  return PH_HEIGHTS[s % PH_HEIGHTS.length];
+  return set[s % set.length];
 }
 
 export function fmtDuration(sec?: number): string | null {
@@ -30,10 +31,12 @@ export default function PieceCard({
   card,
   index,
   onSelect,
+  compact = false,
 }: {
   card: FeedCard;
   index: number;
   onSelect: (c: FeedCard) => void;
+  compact?: boolean;
 }) {
   const src = SOURCE_STYLES[card.source];
   const title = card.title ?? card.piece?.title ?? "Untitled";
@@ -65,7 +68,12 @@ export default function PieceCard({
       {card.thumbnail_url ? (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={card.thumbnail_url} alt="" loading="lazy" className="w-full object-cover" />
+          <img
+            src={card.thumbnail_url}
+            alt=""
+            loading="lazy"
+            className={`w-full object-cover ${compact ? "max-h-52" : ""}`}
+          />
           {/* hover: darken + title */}
           <div className="pointer-events-none absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/85 via-black/15 to-transparent p-3 opacity-0 transition-opacity duration-100 ease-out group-hover:opacity-100">
             <p className="line-clamp-3 text-sm font-semibold text-white">{title}</p>
@@ -74,19 +82,16 @@ export default function PieceCard({
         </>
       ) : (
         // themed score tile for cards without a first-page thumbnail
+        // (pt-9 clears the absolute source badge in the top-left)
         <div
-          style={{ minHeight: phHeight(card.id) }}
-          className="flex w-full flex-col justify-between gap-3 bg-gradient-to-br from-[#20202b] to-[#2c2c3b] p-4"
+          style={{ minHeight: phHeight(card.id, compact) }}
+          className="flex w-full flex-col gap-2.5 bg-gradient-to-br from-[#20202b] to-[#2c2c3b] p-4 pt-9"
         >
-          <div className="flex items-center gap-1.5 text-[var(--muted)]">
-            <FileMusic size={15} />
-            <span className="font-mono text-[10px] uppercase tracking-widest">Score</span>
-          </div>
-          <div>
+          <div className="flex-1">
             <p className="line-clamp-2 text-sm font-semibold">
               {card.author ?? card.piece?.composer ?? "Unknown composer"}
             </p>
-            <p className="mt-0.5 line-clamp-2 text-xs text-[var(--muted)]">{title}</p>
+            <p className="mt-0.5 line-clamp-3 text-xs text-[var(--muted)]">{title}</p>
           </div>
           {chips.length > 0 && (
             <div className="flex flex-wrap gap-1">

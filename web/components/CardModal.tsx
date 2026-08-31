@@ -38,6 +38,9 @@ export default function CardModal({ card, onClose }: { card: FeedCard; onClose: 
   const sheetLink =
     (m.sheet_music_links && m.sheet_music_links[0]) ||
     (card.source !== "youtube" ? card.url : undefined);
+  // Only link the title when the "view score" button doesn't already open the same
+  // URL — otherwise it's a redundant duplicate link (IMSLP/MuseScore case).
+  const titleLinks = card.url !== sheetLink;
 
   // lock background scroll while open + close on Escape
   useEffect(() => {
@@ -106,15 +109,19 @@ export default function CardModal({ card, onClose }: { card: FeedCard; onClose: 
           transition={{ delay: 0.12 }}
         >
           <div className="flex-1 overflow-y-auto p-5">
-            <a
-              href={card.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="group inline-flex items-start gap-1.5 text-lg font-semibold leading-snug hover:text-[var(--accent)]"
-            >
-              <span>{title}</span>
-              <ExternalLink size={15} className="mt-1.5 shrink-0 opacity-60 group-hover:opacity-100" />
-            </a>
+            {titleLinks ? (
+              <a
+                href={card.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group inline-flex items-start gap-1.5 text-lg font-semibold leading-snug hover:text-[var(--accent)]"
+              >
+                <span>{title}</span>
+                <ExternalLink size={15} className="mt-1.5 shrink-0 opacity-60 group-hover:opacity-100" />
+              </a>
+            ) : (
+              <h2 className="text-lg font-semibold leading-snug">{title}</h2>
+            )}
             {composer && <p className="mt-1 text-sm text-[var(--muted)]">{composer}</p>}
             {card.author && <p className="mt-0.5 text-sm text-[var(--muted)]">{card.author}</p>}
 

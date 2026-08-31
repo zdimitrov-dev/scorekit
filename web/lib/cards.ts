@@ -21,5 +21,14 @@ export async function getCards(limit = 300): Promise<FeedCard[]> {
   const { data, error } = await sb.from("cards").select(SELECT).limit(limit);
   if (error) throw new Error(error.message);
   const cards = (data ?? []) as unknown as FeedCard[];
-  return cards.sort(byRelevance);
+  cards.sort(byRelevance);
+  // Drop cards that share a thumbnail with a higher-ranked one — e.g. an IMSLP
+  // redirect page and the canonical work both resolve to the same first-page image.
+  const seenThumbs = new Set<string>();
+  return cards.filter((c) => {
+    if (!c.thumbnail_url) return true;
+    if (seenThumbs.has(c.thumbnail_url)) return false;
+    seenThumbs.add(c.thumbnail_url);
+    return true;
+  });
 }

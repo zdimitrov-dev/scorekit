@@ -44,6 +44,33 @@ def test_opus_number_disambiguates():
     assert match_score(wrong, q) < DROP_THRESHOLD
 
 
+def test_sibling_movement_ranks_below_the_exact_match_but_is_kept():
+    # Op.28 No.6 is not what was asked for, but it *is* the same set — the soft-narrow
+    # policy keeps it as a discoverable neighbour, well beneath the exact hit.
+    q = "Prelude Op 28 No 4"
+    exact = match_score(_card("Chopin - Prelude Op. 28 No. 4"), q)
+    sibling = match_score(_card("Chopin - Prelude Op. 28 No. 6"), q)
+    assert exact == 1.0
+    assert DROP_THRESHOLD <= sibling < exact
+
+
+def test_scores_are_granular_not_bucketed():
+    # A flat score collapses "Best match" into its tiebreak; near-misses must separate.
+    q = "Chopin Op 48 No 1"
+    scores = [
+        match_score(_card("Chopin - Nocturne Op. 48 No. 1"), q),
+        match_score(_card("Seong-Jin Cho - Nocturne in C minor Op. 48 No. 1"), q),
+        match_score(_card("Chopin Nocturne Op. 48"), q),
+    ]
+    assert len(set(scores)) == len(scores)
+
+
+def test_annotate_and_filter_records_source_rank():
+    cards = [_card("Debussy - Clair de Lune"), _card("Clair de Lune (live)")]
+    kept, _ = annotate_and_filter(cards, "Clair de Lune", "Debussy")
+    assert [c.metadata["rank"] for c in kept] == [0, 1]
+
+
 def test_annotate_and_filter_drops_and_scores():
     cards = [
         _card("Debussy - Clair de Lune"),                 # 1.0 keep

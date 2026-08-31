@@ -45,6 +45,13 @@ class _DictCache:
 
 CFG = SimpleNamespace(tavily_api_key="tvly-test")
 
+HASH = "a28667c05840f4b57b7ae0bb5ccddeabb14e35d6"
+SCOREDATA = f"https://musescore.com/static/musescore/scoredata/g/{HASH}/score_0.svg?no-cache=1"
+PROMO = "https://musescore.com/static/musescore/sale_offer/image_desktop/3/4/0/7.webp"
+EXPECTED_THUMB = (
+    f"https://cdn.ustatik.com/musescore/scoredata/g/{HASH}/score_0.png@600x840?bgclr=ffffff"
+)
+
 TAVILY_RESP = {
     "results": [
         {
@@ -52,7 +59,8 @@ TAVILY_RESP = {
             "url": "https://musescore.com/user/scores/6937591",
             "content": "Download and print Clair de Lune …",
             "score": 0.93,
-            "images": ["https://musescore.com/thumb.png"],
+            # real responses lead with page chrome; the engraving is buried in it
+            "images": [PROMO, SCOREDATA, "https://musescore.com/static/appstore.webp"],
         },
         {
             "title": "Clair de Lune – Debussy",
@@ -75,9 +83,17 @@ def test_clean_title():
         "Clair de Lune Sheet music for Piano (Solo)"
 
 
-def test_thumbnail_handles_string_and_object():
-    assert _thumbnail({"images": ["a"]}) == "a"
-    assert _thumbnail({"images": [{"url": "b"}]}) == "b"
+def test_thumbnail_rebuilds_scoredata_url_via_cdn():
+    # the on-page musescore.com asset 403s when hotlinked, so it must be rewritten
+    assert _thumbnail({"images": [PROMO, SCOREDATA]}) == EXPECTED_THUMB
+    assert _thumbnail({"images": [{"url": SCOREDATA}]}) == EXPECTED_THUMB
+
+
+def test_thumbnail_rejects_page_chrome():
+    # promo banners / app badges are not previews — no thumbnail beats a wrong one
+    assert _thumbnail({"images": [PROMO]}) is None
+    assert _thumbnail({"images": ["https://ids4.ad.gt/api/v1/ip_match?id=x"]}) is None
+    assert _thumbnail({"images": []}) is None
     assert _thumbnail({}) is None
 
 
@@ -95,7 +111,7 @@ def test_search_maps_results(monkeypatch):
     assert first.kind == "listing"
     assert first.title == "Clair de Lune Sheet music for Piano (Solo)"
     assert first.url == "https://musescore.com/user/scores/6937591"
-    assert first.thumbnail_url == "https://musescore.com/thumb.png"
+    assert first.thumbnail_url == EXPECTED_THUMB
     assert first.metadata["tavily_score"] == 0.93
     assert cards[1].thumbnail_url is None
 

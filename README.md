@@ -13,10 +13,12 @@ Two feed modes over one system:
 
 ## Status
 
-**Phase 1 — YouTube connector live.** Supabase schema is applied (RLS on),
-ingestion persists pieces + cards, and the YouTube connector searches, enriches,
-and upserts results end-to-end. IMSLP/MuseScore connectors and the feed are next.
-See the build plan below.
+**Phases 1–3 — all three connectors live.** Supabase schema is applied (RLS on) and
+ingestion persists pieces + cards end-to-end from YouTube, IMSLP (with enrichment and
+disambiguation resolution) and MuseScore (via Tavily). **Phase 4 — the feed UI (`web/`)
+is in progress**: a Next.js masonry board with a live search that ingests unseen pieces
+on demand and streams results per source as they arrive. The home-page recommender
+(Phase 6) is next. See the build plan below.
 
 ## Architecture
 
@@ -67,11 +69,11 @@ docker compose run --rm ingest --query "Clair de Lune"
 |---|---|
 | 0 | Repo, Supabase schema (live, RLS on), Docker skeleton ✅ |
 | 1 | YouTube connector — search, enrich, persist ✅ |
-| 2 | IMSLP connector — framework laid (gated pending terms) |
-| 3 | MuseScore via Tavily search — built (gated on `TAVILY_API_KEY`) |
-| 4 | Feed UI — Next.js masonry board (`web/`) 🚧 |
+| 2 | IMSLP connector — search, enrichment, disambiguation resolution ✅ |
+| 3 | MuseScore via Tavily search ✅ |
+| 4 | Feed UI — Next.js masonry board + live streaming search (`web/`) 🚧 |
 | 5 | Swipe interaction + logging |
-| 6 | Recommendation engine (home feed) — the ML centerpiece |
+| 6 | Recommendation engine (home feed) — the ML centerpiece; content-based (tags) first, then collaborative 🚧 |
 | 7 | Polish + deploy |
 
 ## Data sources

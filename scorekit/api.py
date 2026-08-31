@@ -44,6 +44,7 @@ _CARD_SELECT = (
     "piece:pieces(id,title,composer)"
 )
 _SEARCH_LIMIT = 25
+_SOURCES = ("youtube", "imslp", "musescore")
 
 
 def _cards_for_slug(slug: str) -> list[dict]:
@@ -66,23 +67,36 @@ def _read_source(sb, piece_id: str, source: str) -> list[dict]:
 
 
 def _ingest_stream(q: str, composer: str | None, limit: int, refresh: bool) -> Iterator[list[dict]]:
-    """Yield one batch of persisted cards per source. Cached pieces replay their
-    stored cards by source; new pieces run each connector, persist, then yield."""
+    """Yield one batch of persisted cards per source.
+
+    Cached sources replay their stored cards; sources with nothing cached are ingested
+    live. The cache is keyed **per source, on actual cards** rather than on the
+    existence of the piece row: a piece whose ingest stored nothing (a connector was
+    down, out of quota, or its rows were later removed) would otherwise be a permanent
+    negative cache — every repeat search replaying zero cards and reporting "no
+    results" with no way to recover. This also lets a source that was unavailable on
+    the first search fill itself in on a later one.
+    """
     slug = normalize_slug(q, composer)
     sb = get_client()
 
     existing = sb.table("pieces").select("id").eq("slug", slug).limit(1).execute().data
+    pending = list(_SOURCES)
     if existing and not refresh:
         pid = existing[0]["id"]
-        for source in ("youtube", "imslp", "musescore"):
+        for source in _SOURCES:
             batch = _read_source(sb, pid, source)
             if batch:
+                pending.remove(source)
                 yield batch
-        return
+        if not pending:
+            return
 
     piece_id = upsert_piece(Piece(slug=slug, title=q, composer=composer))
     for connector_cls in CONNECTORS:
         connector = connector_cls()
+        if connector.source not in pending:
+            continue
         try:
             found = connector.search(q, limit=limit)
         except (NotImplementedError, ConnectorUnavailable) as exc:

@@ -42,6 +42,15 @@ _SCORE_ID_RE = re.compile(r"/scores/(\d+)")
 # Trailing "| Musescore.com" site branding on result titles.
 _SITE_SUFFIX_RE = re.compile(r"\s*\|\s*musescore\.com\s*$", re.IGNORECASE)
 
+# The engraved first page of a score, as referenced on a MuseScore listing page.
+_SCOREDATA_RE = re.compile(r"/scoredata/g/([0-9a-f]{40})/score_0\b")
+# MuseScore's image CDN, which serves the same asset with an "@WxH" resize suffix.
+# We must go through it: musescore.com/static/... answers hotlinked requests with 403,
+# so the URL that appears on the page is useless as a thumbnail for our feed.
+_CDN = "https://cdn.ustatik.com/musescore/scoredata/g/{h}/score_0.png@{w}x{ht}?bgclr=ffffff"
+# Portrait, matching a sheet-music page and the scale of our other sources' thumbnails.
+THUMB_WIDTH, THUMB_HEIGHT = 600, 840
+
 
 def _score_id(url: str) -> str:
     """Stable external_id for a MuseScore result: the numeric score id if present,
@@ -58,20 +67,29 @@ def _clean_title(title: str) -> str:
 
 
 def _thumbnail(result: dict) -> str | None:
-    """Best score-preview image from a Tavily result, skipping MuseScore's promo /
-    sale banners (the green/blue "Pro" ads that otherwise render as a weird strip)."""
+    """Build a first-page score thumbnail from a Tavily result, or ``None``.
+
+    A result's ``images`` are simply everything scraped off the listing page — mostly
+    chrome: the green/blue "Pro" sale banner, app-store badges, ad-network tracking
+    pixels. Only one entry is the score itself, identified by its ``/scoredata/g/<hash>/
+    score_0`` path, and we rebuild that hash into a correctly sized CDN URL rather than
+    using the on-page link (see ``_CDN``).
+
+    Returning ``None`` is a normal outcome — some listings expose no engraving — and the
+    feed renders its own titled tile for those, which beats showing a promo banner.
+    """
     urls: list[str] = []
     for im in result.get("images") or []:
         if isinstance(im, str):
             urls.append(im)
         elif isinstance(im, dict) and im.get("url"):
             urls.append(im["url"])
-    # prefer an actual first-page score render
-    score = [u for u in urls if "scoredata" in u or "/score_" in u]
-    if score:
-        return score[0]
-    non_promo = [u for u in urls if "sale_offer" not in u and "image_desktop" not in u]
-    return non_promo[0] if non_promo else None
+
+    for url in urls:
+        m = _SCOREDATA_RE.search(url)
+        if m:
+            return _CDN.format(h=m.group(1), w=THUMB_WIDTH, ht=THUMB_HEIGHT)
+    return None
 
 
 class _FileCache:

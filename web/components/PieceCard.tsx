@@ -1,7 +1,14 @@
 "use client";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import type { FeedCard, Source } from "@/lib/types";
 import { cleanInstrumentation } from "@/lib/format";
+
+// A remote thumbnail smaller than this isn't a usable preview — it's a favicon, a
+// tracking pixel, or a promo strip that slipped through. We render our own titled
+// tile instead, which is better than a stamp-sized image in a masonry column.
+const MIN_THUMB_W = 160;
+const MIN_THUMB_H = 120;
 
 const SOURCE_STYLES: Record<Source, { label: string; cls: string }> = {
   youtube: { label: "YouTube", cls: "bg-red-500/90" },
@@ -38,8 +45,13 @@ export default function PieceCard({
   onSelect: (c: FeedCard) => void;
   compact?: boolean;
 }) {
+  // Some sources hand us a dead or unusably small image (MuseScore's CDN 403s on
+  // hotlinked assets, for one), so the tile is a runtime fallback, not just a
+  // "no thumbnail_url" branch.
+  const [thumbOk, setThumbOk] = useState(true);
   const src = SOURCE_STYLES[card.source];
   const title = card.title ?? card.piece?.title ?? "Untitled";
+  const showThumb = Boolean(card.thumbnail_url) && thumbOk;
   const duration = fmtDuration(card.metadata?.duration_seconds);
   const chips = [
     cleanInstrumentation(card.metadata?.instrumentation),
@@ -65,13 +77,20 @@ export default function PieceCard({
       transition={{ duration: 0.35, delay: Math.min(index, 14) * 0.025 }}
       className="group relative mb-3 block w-full cursor-pointer overflow-hidden rounded-2xl bg-[var(--surface)] break-inside-avoid ring-1 ring-[var(--border)] transition-shadow hover:shadow-xl hover:shadow-black/40 hover:ring-white/20"
     >
-      {card.thumbnail_url ? (
+      {showThumb ? (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={card.thumbnail_url}
+            src={card.thumbnail_url!}
             alt=""
             loading="lazy"
+            onError={() => setThumbOk(false)}
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              if (img.naturalWidth < MIN_THUMB_W || img.naturalHeight < MIN_THUMB_H) {
+                setThumbOk(false);
+              }
+            }}
             className={`w-full object-cover ${compact ? "max-h-52" : ""}`}
           />
           {/* hover: darken + title */}

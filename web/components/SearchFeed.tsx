@@ -1,7 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, Clock } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
 import Feed from "./Feed";
 import CardModal from "./CardModal";
@@ -18,11 +18,42 @@ function sortVideos(cards: FeedCard[], sort: SortKey): FeedCard[] {
   const ms = (c: FeedCard) => c.metadata?.match_score ?? 0;
   const vc = (c: FeedCard) => c.metadata?.view_count ?? 0;
   const pub = (c: FeedCard) => c.metadata?.published_at ?? "";
+  // the source's own relevance position, kept at ingest
+  const rank = (c: FeedCard) => c.metadata?.rank ?? Number.MAX_SAFE_INTEGER;
   const arr = [...cards];
   if (sort === "views") arr.sort((a, b) => vc(b) - vc(a) || ms(b) - ms(a));
   else if (sort === "newest") arr.sort((a, b) => pub(b).localeCompare(pub(a)));
-  else arr.sort((a, b) => ms(b) - ms(a) || vc(b) - vc(a));
+  // Ties break on the source's relevance rank, NOT on views: tying back to view
+  // count made "Best match" and "Most viewed" render an identical board whenever
+  // scores clustered, which looked like the toggle was broken.
+  else arr.sort((a, b) => ms(b) - ms(a) || rank(a) - rank(b));
   return arr;
+}
+
+const RECENT_KEY = "scorekit:recent-searches";
+const RECENT_MAX = 4;
+
+function loadRecent(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string").slice(0, RECENT_MAX) : [];
+  } catch {
+    return []; // private mode / blocked storage — recents are a convenience, not state
+  }
+}
+
+function saveRecent(query: string, prev: string[]): string[] {
+  const next = [query, ...prev.filter((s) => s.toLowerCase() !== query.toLowerCase())].slice(
+    0,
+    RECENT_MAX,
+  );
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+  return next;
 }
 
 export default function SearchFeed() {
@@ -34,11 +65,28 @@ export default function SearchFeed() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selected, setSelected] = useState<FeedCard | null>(null);
   const [sort, setSort] = useState<SortKey>("match");
+  const [recent, setRecent] = useState<string[]>([]);
+  const [recentOpen, setRecentOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
 
-  async function runSearch(e: React.FormEvent) {
-    e.preventDefault();
-    const query = q.trim();
+  // read on mount, not during render: localStorage doesn't exist on the server
+  useEffect(() => setRecent(loadRecent()), []);
+
+  useEffect(() => {
+    if (!recentOpen) return;
+    function onDown(e: MouseEvent) {
+      if (!boxRef.current?.contains(e.target as Node)) setRecentOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [recentOpen]);
+
+  async function search(raw: string) {
+    const query = raw.trim();
     if (!query || loading) return;
+    setQ(query);
+    setRecentOpen(false);
+    setRecent((prev) => saveRecent(query, prev));
     setLoading(true);
     setError(null);
     setSubmitted(query);
@@ -93,10 +141,13 @@ export default function SearchFeed() {
   return (
     <div>
       <form
-        onSubmit={runSearch}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void search(q);
+        }}
         className="sticky top-14 z-20 -mx-3 mb-4 bg-[var(--background)]/90 px-3 py-3 backdrop-blur sm:-mx-5 sm:px-5"
       >
-        <div className="relative">
+        <div ref={boxRef} className="relative">
           <Search
             size={18}
             className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[var(--muted)]"
@@ -105,6 +156,11 @@ export default function SearchFeed() {
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onFocus={() => setRecentOpen(true)}
+            // onFocus alone misses the common case: after a search the input still
+            // holds focus, so clicking back into it fires no focus event.
+            onClick={() => setRecentOpen(true)}
+            onKeyDown={(e) => e.key === "Escape" && setRecentOpen(false)}
             placeholder="Search a piece — e.g. “Für Elise” or “Chopin Nocturne”"
             className="w-full rounded-full border border-[var(--border)] bg-[var(--surface)] py-3 pl-11 pr-24 text-sm outline-none transition-colors focus:border-white/25"
           />
@@ -115,6 +171,25 @@ export default function SearchFeed() {
           >
             Search
           </button>
+
+          {recentOpen && recent.length > 0 && (
+            <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] py-1 shadow-xl shadow-black/40">
+              <p className="px-4 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">
+                Recent
+              </p>
+              {recent.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => void search(r)}
+                  className="flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-2)]"
+                >
+                  <Clock size={14} className="shrink-0 text-[var(--muted)]" />
+                  <span className="truncate">{r}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </form>
 

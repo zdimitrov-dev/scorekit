@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-31 · **Phase:** connectors (YouTube + IMSLP live; MuseScore switched to Tavily, needs a key); **Phase 4 feed UI (`web/`) with live streaming search — in progress** ·
+**Last updated:** 2026-08-31 · **Phase:** all three connectors live (YouTube, IMSLP, MuseScore/Tavily); **Phase 4 feed UI (`web/`) with live streaming search — in progress** ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -17,20 +17,25 @@
 | Database schema (`db/schema.sql`) | ✅ Applied to live Supabase; RLS enabled on all tables |
 | Supabase project | ✅ Provisioned — schema applied, RLS on, `.env` filled & connection verified |
 | Docker image build | ⛔ Not built/verified yet |
-| Source connectors | 🟡 YouTube **live**; IMSLP **live** (search + enrichment, gated by `IMSLP_ENABLED`); MuseScore **built on Tavily** (gated by `TAVILY_API_KEY`, needs a key) |
+| Source connectors | ✅ All three **live** — YouTube; IMSLP (search + enrichment, gated by `IMSLP_ENABLED`); MuseScore via Tavily (gated by `TAVILY_API_KEY`) |
 | Attribution + enrichment | ✅ Match-scoring filter (`scorekit/matching.py`) + IMSLP enrichment (license, instrumentation, style, year) |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI (Phase 4) | 🟡 In progress — Next.js app in `web/` (masonry board, bottom nav, click-to-expand modal, like/save); reads Supabase server-side |
 | Swipe logging / recommender | ⛔ Not started (Phases 5–6) |
 
-**The immediate next action:** the ingest pipeline is now `search → attribution
-match-filter → IMSLP enrichment (+ disambiguation resolution) → persist`, verified live
-in a dry run. IMSLP terms confirmed. A real ingest with the new pipeline refreshes
-existing cards (upsert, no duplicates) with `match_score`, enrichment, and resolved
-disambiguation pages. Natural next steps: run that real ingest, or start the feed UI
-(Phase 4). Open refinements: YouTube `kind` via an LLM (see Open questions), the
+**The immediate next action:** the **home-page recommender (Phase 6, content-based first)**.
+Home currently renders a mixed board of everything as a stand-in. The plan is
+**content-based / non-collaborative ranking over `piece_tags`** (composer, era, style,
+instrumentation, difficulty), then a **collaborative** model layered on top once
+`interactions` has enough volume to learn from — content-based also solves the cold-start
+the collaborative model can't.
+
+Open refinements elsewhere: YouTube `kind` via an LLM (see Open questions), the
 same-name/different-composition attribution residual, per-movement labeling (a resolved
-movement lands on its parent-work page), and IMSLP thumbnails/PDF links.
+movement lands on its parent-work page), IMSLP thumbnails/PDF links, and **query
+normalization** so "Clair de Lune" and "Debussy Clair de Lune" resolve to one piece (they
+are separate slugs today; a bare opus query like "Op 48 No 1" also returns no IMSLP,
+because IMSLP's pages are titled by piece + composer).
 
 ---
 
@@ -403,10 +408,10 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 | 0 | Repo, Supabase schema, Docker skeleton | ✅ Done — schema applied to live Supabase (RLS on); Docker image still unbuilt |
 | 1 | YouTube connector (first end-to-end slice) | ✅ Working end-to-end live (search + enrich + persist); refinements open (pagination, richer kind, stale-card reconcile) |
 | 2 | IMSLP connector | ✅ Live + enriched + **disambiguation resolution** (Option A), gated by `IMSLP_ENABLED` (terms confirmed). Open: per-movement labeling, thumbnails/PDF links |
-| 3 | MuseScore via Tavily search (`include_domains=musescore.com`, cached) | 🟡 Built + unit-tested, gated & inert until `TAVILY_API_KEY` set; then verify live. (Switched off Google CSE, which is closed to new projects.) |
-| 4 | Feed UI (mixed-card masonry) | 🟡 In progress — Next.js `web/`: masonry board, bottom nav, framer-motion expand modal, like/save (localStorage). Open: swipe, source-diversity ranking, live search→ingest |
+| 3 | MuseScore via Tavily search (`include_domains=musescore.com`, cached) | ✅ Live and verified against the API (score-preview thumbnails rebuilt via the CDN). (Switched off Google CSE, which is closed to new projects.) Open: pagination, uploader/instrumentation parsing |
+| 4 | Feed UI (mixed-card masonry) | 🟡 In progress — Next.js `web/`: masonry board, bottom nav, framer-motion expand modal, like/save (localStorage), live streaming search + sorts + recent searches. Open: swipe, source-diversity ranking |
 | 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ |
-| 6 | Recommendation engine / home feed | ⛔ |
+| 6 | Recommendation engine / home feed | 🟡 Next up — **content-based (tag) ranking first**, collaborative filtering layered on afterwards |
 | 7 | Polish + deploy (branding, domain, demo) | ⛔ |
 
 Phases 0–4 are mostly mechanical pipeline work and should move quickly. Phases 5–6
@@ -445,9 +450,17 @@ the recommender.
   additionally **resolves disambiguation pages** into the real work-page cards they point
   to (parses `LinkWork` templates — the ingest pipeline calls this). Unit-tested.
 - `scorekit/matching.py` — **attribution match-scoring** (`tests/test_matching.py`).
-  Scores each card against the queried piece (title phrase/overlap + composer boost),
-  stores `metadata['match_score']`, and drops only clear non-matches (`DROP_THRESHOLD`,
-  lenient — lesser/related works survive at a lower score). Runs before enrichment.
+  Scores each card against the queried piece and stores `metadata['match_score']`, dropping
+  only clear non-matches (`DROP_THRESHOLD`, lenient — lesser/related works survive at a lower
+  score). Runs before enrichment. The score blends token **overlap** with the **longest
+  contiguous run** of query tokens (weighted 0.4/0.6 — word order carries the phrase), plus a
+  composer-surname boost. Opus/movement **numbers** are handled by contradiction, not absence:
+  a card naming a *different* opus is penalised hard (`×0.1–1.0` by matched fraction), while a
+  card naming no number at all is only nudged (`×0.6`), since it may be the same piece
+  described by key. `annotate_and_filter` also records each card's `metadata['rank']` (the
+  connector's own relevance position) — the feed uses it to break `match_score` ties.
+  *Why continuous:* an earlier bucketed score returned 1.0/0.5/0.4 for nearly everything, so
+  the feed's "Best match" collapsed into whatever its tiebreak was.
 - `scorekit/config.py`, `scorekit/db.py` — real code, **verified against the live
   Supabase backend** (connection + reads/writes confirmed).
 - `Dockerfile` / `docker-compose.yml` — structurally complete; **image not built yet.**
@@ -463,16 +476,21 @@ enrichment). Verified live: Debussy "Clair de lune" → the Suite bergamasque pi
 a movement resolves to its **parent-work** page (Clair de lune is track 3 of the suite),
 so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is stored).
 
-**Framework laid, inert (needs config):**
-- `scorekit/connectors/musescore.py` — **Phase 3, gated by `TAVILY_API_KEY`.** Queries the
+- `scorekit/connectors/musescore.py` — **Phase 3, live**, gated by `TAVILY_API_KEY`. Queries the
   **Tavily search API** with `include_domains=["musescore.com"]` → `kind="listing"` cards.
   Per-query TTL **file cache** stays within Tavily's free budget (~1,000/mo); auth/quota errors
-  (401/403/429) → skip. Unit-tested (`tests/test_musescore.py`); **not yet verified live**
-  (needs a key). *Why Tavily:* the original Google Custom Search JSON API is **closed to new
+  (401/403/429) → skip. *Why Tavily:* the original Google Custom Search JSON API is **closed to new
   projects** (shutdown Jan 1 2027) — that was the persistent 403; Vertex AI Search is Google's
   successor but enterprise-priced/complex, so Tavily (recurring free tier + native domain
-  filtering) was chosen. Produces cards with zero further code changes once a key is set.
-  Deferred: pagination, instrumentation parsing, DB-backed cache.
+  filtering) was chosen. Deferred: pagination, instrumentation parsing, DB-backed cache.
+  - **Thumbnails:** a result's `images` are just everything scraped off the listing page —
+    mostly the "Pro" sale banner, app-store badges and ad pixels. Only the entry matching
+    `/scoredata/g/<hash>/score_0` is the engraving, and its `musescore.com/static/...` URL
+    **403s when hotlinked**, so `_thumbnail` rebuilds the hash into a sized CDN URL
+    (`cdn.ustatik.com/...score_0.png@600x840`). No scoredata image → `None` → the feed's own
+    titled tile, which beats showing a promo banner.
+
+**Framework laid, inert (needs config):**
 
 **Stubbed / not started:**
 - IMSLP thumbnails & direct PDF links — served via IMSLP's hashed file system, not
@@ -495,8 +513,26 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
   source (NDJSON)** so cards roll out as they arrive (videos first, then scores). It
   **separates YouTube (the centerpiece masonry board) from a slide-out one-column *scores*
   drawer** (IMSLP + MuseScore, in-page, own scroll, pushes the board left on large screens),
-  with **sort controls** (Best match / Most viewed / Newest). `/favorites` (liked+saved
+  with **sort controls** (Best match / Most viewed / Newest). Clicking into the search box
+  offers the **last 4 searches** (localStorage, most-recent-first; opened on click as well as
+  focus, since after a search the input is already focused). `/favorites` (liked+saved
   from localStorage), `/profile` (scaffold), `/settings` (stub).
+- **Sort tiebreaks matter:** "Best match" breaks `match_score` ties on the source's ingest
+  `rank`, never on view count — tying back to views made it render an identical board to
+  "Most viewed" whenever scores clustered, which read as a broken toggle.
+- `PieceCard` falls back to the themed tile at **runtime**, not just when `thumbnail_url` is
+  null: an image that errors (dead/hotlink-blocked) or loads below 160×120 is treated as
+  absent, so a stamp-sized or broken image never lands in a masonry column.
+
+**Search caching (`_ingest_stream`) — cache on cards, per source, never on the piece row.**
+The stream used to decide "already ingested" from the existence of the *piece* row, so a piece
+whose ingest stored nothing (connector down, out of quota, or rows removed later) became a
+permanent **negative cache**: every repeat search replayed zero batches and the UI reported
+"No results" forever for a query that had worked before. It now replays only sources that
+actually have cards and ingests the rest, which also lets a source that was unavailable on the
+first search fill itself in later. Regression-tested in `tests/test_api_stream.py`. Retrying a
+missing source is cheap in practice (YouTube is effectively never missing, IMSLP is free, and
+Tavily repeats hit the local file cache), so no attempt-tracking column was added.
 - **API (`scorekit/api.py`, FastAPI):** `GET /search` (blocking) and `GET /search/stream`
   (NDJSON per-source batches, each persisted before streaming). The Next route
   `/api/search` proxies the stream server-to-server (`web/.env.local` `SCOREKIT_API_URL`

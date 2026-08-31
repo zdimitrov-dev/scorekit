@@ -2,6 +2,7 @@ export type Source = "youtube" | "imslp" | "musescore";
 
 export interface CardMeta {
   match_score?: number;
+  rank?: number;
   composer?: string;
   view_count?: number;
   published_at?: string;

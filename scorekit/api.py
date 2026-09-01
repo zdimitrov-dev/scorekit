@@ -35,7 +35,8 @@ from .ml.registry import MIN_AUC_GAIN, MIN_POSITIVES, load_model, model_info
 from .ml.serve import score_cards
 from .recommend import SIGNAL_WEIGHTS, idf_weights, rank_cards
 from .similar import similar_cards
-from .store import log_events, retag_piece, upsert_cards, upsert_piece
+from .store import (has_backfilled_column, log_events, retag_piece,
+                    upsert_cards, upsert_piece)
 
 log = logging.getLogger("scorekit.api")
 
@@ -479,13 +480,21 @@ def sync_interactions(req: SyncRequest) -> dict:
     # reported rather than written as a row that trains on nothing.
     by_card = {c["id"]: c.get("piece_id") for c in _all_cards(sb)}
     times = {"like": req.like_times, "save": req.save_times}
-    events, unknown, undated = [], 0, 0
+    # An undated like can only be stored honestly if there is somewhere to record that its
+    # timestamp is fabricated. Without the flag it would enter the log looking like an
+    # ordinary event that happened at the instant of the sync, so it is skipped instead:
+    # the like still ranks the feed from the browser, it simply does not corrupt training.
+    can_flag = has_backfilled_column(sb)
+    events, unknown, undated, skipped = [], 0, 0, 0
     for action, cid in missing:
         if cid not in by_card:
             unknown += 1
             continue
         occurred = times[action].get(cid)
         if not occurred:
+            if not can_flag:
+                skipped += 1
+                continue
             undated += 1
         events.append({"user_id": req.user_id, "action": action,
                        "card_id": cid, "piece_id": by_card[cid],
@@ -498,8 +507,11 @@ def sync_interactions(req: SyncRequest) -> dict:
     written = log_events(events) if events else 0
     if written:
         log.info("sync: backfilled %d likes/saves for %s", written, req.user_id[:8])
+    if skipped:
+        log.info("sync: skipped %d undated likes; apply db/migrations/002 to keep them",
+                 skipped)
     return {"inserted": written, "already_present": len(wanted) - len(missing),
-            "unknown_cards": unknown, "undated": undated}
+            "unknown_cards": unknown, "undated": undated, "skipped_undated": skipped}
 
 
 @app.get("/similar")

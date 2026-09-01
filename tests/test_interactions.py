@@ -73,3 +73,31 @@ def test_negative_dwell_is_clamped():
     c = _FakeClient()
     log_events([{"user_id": "u1", "action": "seen", "card_id": "c1", "dwell_ms": -5}], client=c)
     assert c.tables["interactions"].inserted[0]["dwell_ms"] == 0
+
+
+# --- reconciliation must not invent a chronology ----------------------------
+
+def test_sync_skips_undated_likes_when_it_cannot_flag_them():
+    """A like with no recorded time can only be stored honestly if there is somewhere to
+    say so. Otherwise it enters the log looking like an ordinary event that happened at
+    the instant of the sync, and training reads created_at as chronology.
+
+    This is not hypothetical: clearing the table and reloading the page put twelve likes
+    back, all sharing two timestamps 50ms apart."""
+    from scorekit.store import log_events
+
+    written: list[dict] = []
+
+    class _Table:
+        def insert(self, rows):
+            written.extend(rows)
+            return self
+        def execute(self):
+            return type("R", (), {"data": written})
+
+    client = type("C", (), {"table": lambda self, _n: _Table()})()
+    # An undated row that cannot be flagged is never handed to log_events at all, so the
+    # closest unit-level guarantee is that a supplied time always survives.
+    log_events([{"user_id": "u", "action": "like", "occurred_at": "2026-08-20T10:00:00Z"}],
+               client=client)
+    assert written[0]["created_at"].startswith("2026-08-20")

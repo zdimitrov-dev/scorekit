@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, FlaskConical, Database, Activity, Cpu } from "lucide-react";
-import { currentSignals, getFresh } from "@/lib/feedCache";
+import { RefreshCw, FlaskConical, Database, Activity, Cpu, Eraser } from "lucide-react";
+import { clearBrowserSignals, getFresh } from "@/lib/feedCache";
 
 /**
  * Development dashboard. Not part of the product; remove before release.
@@ -70,6 +70,38 @@ function Row({ label, value, tone }: { label: string; value: React.ReactNode; to
   );
 }
 
+/** A destructive control. Arming it changes the label to say exactly what is about to be
+ *  deleted, so the second press is made knowing the consequence rather than confirming a
+ *  generic "are you sure". */
+function Danger({
+  onClick,
+  armed,
+  busy,
+  idle,
+  confirm,
+}: {
+  onClick: () => void;
+  armed: boolean;
+  busy: boolean;
+  idle: string;
+  confirm: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={busy}
+      className={`flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium transition-colors disabled:opacity-40 ${
+        armed
+          ? "bg-red-500/15 text-red-400"
+          : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground)]"
+      }`}
+    >
+      <Eraser size={13} />
+      {armed ? confirm : idle}
+    </button>
+  );
+}
+
 const num = (n?: number, digits = 3) =>
   typeof n === "number" && !Number.isNaN(n) ? n.toFixed(digits) : "n/a";
 
@@ -108,6 +140,43 @@ export default function DevDashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Every destructive control takes two presses, because none of them has an undo.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reset = useCallback(() => {
+    if (confirming !== "signals") {
+      setConfirming("signals");
+      return;
+    }
+    clearBrowserSignals();
+    window.location.reload();
+  }, [confirming]);
+
+  const clearLog = useCallback(
+    async (action: string | null) => {
+      const key = `log:${action ?? "all"}`;
+      if (confirming !== key) {
+        setConfirming(key);
+        return;
+      }
+      setConfirming(null);
+      setBusy(true);
+      try {
+        await fetch("/api/dev", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action }),
+        });
+      } catch {
+        /* the reload below will show what actually happened */
+      }
+      setBusy(false);
+      await load();
+    },
+    [confirming, load],
+  );
 
   const m = stats?.model;
   const served = stats?.active_ranker === "model";
@@ -213,12 +282,48 @@ export default function DevDashboard() {
                   : "text-amber-400"
               }
             />
+            {/* The two stores drift apart: the feed ranks from what this browser
+                remembers, the model trains from what reached the database. Events sent
+                while the API was down are swallowed by design, so the browser can be
+                ahead. Showing both makes that visible instead of puzzling. */}
             <div className="mt-3 border-t border-[var(--border)] pt-2">
               <Row label="This browser: likes" value={local.likes} />
               <Row label="This browser: saves" value={local.saves} />
               <Row
+                label="Ranks from"
+                value={`${local.likes + local.saves} browser signals`}
+                tone={
+                  local.likes + local.saves > stats.interactions.positives
+                    ? "text-amber-400"
+                    : undefined
+                }
+              />
+              <Row
                 label="Feed cache"
                 value={local.cached ? `ready (${local.cachedBy})` : "empty"}
+              />
+            </div>
+            <div className="mt-3 space-y-1.5">
+              <Danger
+                onClick={() => void clearLog("impression")}
+                armed={confirming === "log:impression"}
+                busy={busy}
+                idle="Clear impressions from the database"
+                confirm="Press again to delete every impression row"
+              />
+              <Danger
+                onClick={() => void clearLog(null)}
+                armed={confirming === "log:all"}
+                busy={busy}
+                idle="Clear the whole interactions table"
+                confirm="Press again to delete every interaction, likes included"
+              />
+              <Danger
+                onClick={reset}
+                armed={confirming === "signals"}
+                busy={busy}
+                idle="Clear browser likes and saves"
+                confirm="Press again to erase this browser's likes and saves"
               />
             </div>
           </Panel>

@@ -355,6 +355,43 @@ def dev_stats() -> dict:
     }
 
 
+class ClearInteractionsRequest(BaseModel):
+    # None clears the whole table; naming one action clears only those rows.
+    action: str | None = None
+
+
+@app.post("/dev/clear-interactions")
+def dev_clear_interactions(req: ClearInteractionsRequest) -> dict:
+    """Empty the interaction log so a ranker can be tested against a fresh history.
+
+    Deliberately unauthenticated and destructive, which is only acceptable because this is
+    a local development surface. Remove it before release along with the rest of /dev.
+    """
+    sb = get_client()
+
+    def remaining() -> int:
+        q = sb.table("interactions").select("id", count="exact")
+        if req.action:
+            q = q.eq("action", req.action)
+        return q.limit(1).execute().count or 0
+
+    before = remaining()
+    # PostgREST caps a delete at its own row limit, so this repeats until the rows are
+    # actually gone rather than assuming one call was enough.
+    for _ in range(50):
+        q = sb.table("interactions").delete()
+        # A delete with no filter is refused, so match every row on a column that is
+        # never null.
+        q = q.eq("action", req.action) if req.action else q.neq("action", "")
+        q.execute()
+        if remaining() == 0:
+            break
+
+    left = remaining()
+    log.info("dev: cleared %d interaction rows (action=%s)", before - left, req.action or "all")
+    return {"deleted": before - left, "action": req.action, "remaining": left}
+
+
 @app.get("/similar")
 def similar(card_id: str, limit: int = 12) -> dict:
     """Cards like one specific card — what the modal shows underneath it.

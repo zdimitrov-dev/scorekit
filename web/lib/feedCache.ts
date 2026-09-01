@@ -87,6 +87,22 @@ export function getFresh(ranker: Ranker = "auto"): Cached | null {
   return entry;
 }
 
+/** Forget the cached board and the browser's like/save history.
+ *
+ *  A development affordance, for testing a ranker against a taste built from scratch. The
+ *  signals live only in this browser, so this is the only place they exist. */
+export function clearBrowserSignals(): void {
+  memory = null;
+  for (const key of [KEY, "scorekit:likes", "scorekit:saves"]) {
+    try {
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
+    } catch {
+      /* private mode: nothing to clear */
+    }
+  }
+}
+
 let inFlight: Promise<Cached | null> | null = null;
 
 /** Fetch and cache a fresh ranking. Concurrent callers share one request. */

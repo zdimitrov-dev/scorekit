@@ -1,4 +1,5 @@
 "use client";
+import { readTimes } from "./useCollection";
 
 /**
  * Interaction logging — the recommender's training signal (Phase 5).
@@ -22,6 +23,12 @@ export interface TrackEvent {
   piece_id?: string;
   dwell_ms?: number;
   feed_position?: number;
+  /** When the thing happened, ISO 8601. Stamped here rather than left to the database,
+   *  which would otherwise record when the row was written: up to a batch interval later
+   *  for a normal event, and arbitrarily later for one flushed at page exit or recovered
+   *  by a reconciliation. Training reads created_at as chronology, so the difference
+   *  matters. Filled in automatically by track and trackNow. */
+  occurred_at?: string;
 }
 
 const VIEWER_KEY = "scorekit:viewer";
@@ -91,7 +98,7 @@ export function flush(beacon = false) {
 }
 
 export function track(event: TrackEvent) {
-  queue.push(event);
+  queue.push({ occurred_at: new Date().toISOString(), ...event });
   if (queue.length >= MAX_BATCH) {
     flush();
     return;
@@ -108,7 +115,8 @@ export function track(event: TrackEvent) {
  * succeeds, so a swallowed failure leaves the two permanently disagreeing.
  */
 export async function trackNow(event: TrackEvent, attempts = 3): Promise<boolean> {
-  const body = JSON.stringify({ user_id: viewerId(), events: [event] });
+  const stamped = { occurred_at: new Date().toISOString(), ...event };
+  const body = JSON.stringify({ user_id: viewerId(), events: [stamped] });
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const res = await fetch(ENDPOINT, {
@@ -150,7 +158,16 @@ export async function syncSignals(): Promise<number> {
     const res = await fetch("/api/interactions/sync", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ user_id: viewerId(), likes, saves }),
+      body: JSON.stringify({
+        user_id: viewerId(),
+        likes,
+        saves,
+        // Where the time is known the row is written with it and counts as ordinary
+        // history. Only ids from before times were recorded arrive without one, and
+        // those are the ones the server has to flag.
+        like_times: readTimes("scorekit:likes"),
+        save_times: readTimes("scorekit:saves"),
+      }),
     });
     if (!res.ok) return 0;
     const data = (await res.json()) as { inserted?: number };

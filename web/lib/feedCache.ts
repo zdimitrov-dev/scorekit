@@ -93,7 +93,9 @@ export function getFresh(ranker: Ranker = "auto"): Cached | null {
  *  signals live only in this browser, so this is the only place they exist. */
 export function clearBrowserSignals(): void {
   memory = null;
-  for (const key of [KEY, "scorekit:likes", "scorekit:saves"]) {
+  const keys = [KEY, "scorekit:likes", "scorekit:saves",
+               "scorekit:likes:at", "scorekit:saves:at"];
+  for (const key of keys) {
     try {
       localStorage.removeItem(key);
       sessionStorage.removeItem(key);

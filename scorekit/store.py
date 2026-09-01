@@ -7,6 +7,7 @@ to test in isolation with an injected client.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .db import get_client
@@ -77,6 +78,29 @@ _ACTION_MAP = {
 }
 
 
+# A client clock can be wrong, and created_at is what training reads as chronology, so a
+# supplied time is only trusted inside a sane window. Outside it the server's own clock is
+# the safer answer.
+_MAX_CLOCK_SKEW = timedelta(minutes=5)
+_EARLIEST_PLAUSIBLE = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+
+def parse_occurred_at(value: Any) -> str | None:
+    """A client-supplied timestamp, or None to let the database stamp the row."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if ts > now + _MAX_CLOCK_SKEW or ts < _EARLIEST_PLAUSIBLE:
+        return None
+    return ts.isoformat()
+
+
 _backfilled_column: bool | None = None
 
 
@@ -120,13 +144,27 @@ def log_events(events: list[dict[str, Any]], client: Any = None) -> int:
             "dwell_ms": max(0, int(dwell)) if isinstance(dwell, (int, float)) else None,
             "feed_position": int(position) if isinstance(position, (int, float)) else None,
         }
-        # created_at is the sync time for a reconciled row, so it carries no ordering
-        # information and training must not read it as chronology. See migration 002.
-        if e.get("backfilled") and has_backfilled_column(client):
+        # When the client says when it happened, store that. Left to the default, a row
+        # is stamped when it is *written*: a batch interval late for an ordinary event,
+        # arbitrarily late for one recovered by a reconciliation.
+        occurred = parse_occurred_at(e.get("occurred_at"))
+        if occurred:
+            row["created_at"] = occurred
+        # Only a row whose real time is unknown is flagged, since that is the one training
+        # must not read as chronology. See migration 002.
+        if e.get("backfilled") and not occurred and has_backfilled_column(client):
             row["backfilled"] = True
         rows.append(row)
     if not rows:
         return 0
+    # PostgREST builds one column list for the whole batch, so a row that omits created_at
+    # alongside one that sets it is sent an explicit NULL rather than falling back to the
+    # column default — which the not-null constraint rejects, losing the entire batch.
+    # Filling the gaps with now() is exactly what the default would have done.
+    if any("created_at" in r for r in rows):
+        now = datetime.now(timezone.utc).isoformat()
+        for r in rows:
+            r.setdefault("created_at", now)
     client = client or get_client()
     result = client.table("interactions").insert(rows).execute()
     return len(result.data or [])

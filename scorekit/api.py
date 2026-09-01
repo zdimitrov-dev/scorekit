@@ -189,6 +189,9 @@ class InteractionEvent(BaseModel):
     piece_id: str | None = None
     dwell_ms: int | None = None
     feed_position: int | None = None
+    # When it happened, per the client. Without it the row is stamped when it is written,
+    # which is later by a batch interval and much later for anything flushed on page exit.
+    occurred_at: str | None = None
 
 
 class InteractionBatch(BaseModel):
@@ -438,6 +441,10 @@ class SyncRequest(BaseModel):
     user_id: str
     likes: list[str] = []
     saves: list[str] = []
+    # {card_id: ISO timestamp} where the browser recorded when. Ids liked before the
+    # browser started recording times simply have no entry, and only those are flagged.
+    like_times: dict[str, str] = {}
+    save_times: dict[str, str] = {}
 
 
 @app.post("/interactions/sync")
@@ -471,22 +478,28 @@ def sync_interactions(req: SyncRequest) -> dict:
     # A card id the corpus no longer holds cannot be attributed to a piece, so it is
     # reported rather than written as a row that trains on nothing.
     by_card = {c["id"]: c.get("piece_id") for c in _all_cards(sb)}
-    events, unknown = [], 0
+    times = {"like": req.like_times, "save": req.save_times}
+    events, unknown, undated = [], 0, 0
     for action, cid in missing:
         if cid not in by_card:
             unknown += 1
             continue
+        occurred = times[action].get(cid)
+        if not occurred:
+            undated += 1
         events.append({"user_id": req.user_id, "action": action,
                        "card_id": cid, "piece_id": by_card[cid],
-                       # created_at will be now, not when it was pressed. Flagged so
-                       # training uses it for the profile but never as a labelled row.
+                       "occurred_at": occurred,
+                       # Flagged only when the real time is unknown, in which case
+                       # created_at is the sync time and carries no ordering information.
+                       # store.log_events drops the flag whenever a time is supplied.
                        "backfilled": True})
 
     written = log_events(events) if events else 0
     if written:
         log.info("sync: backfilled %d likes/saves for %s", written, req.user_id[:8])
     return {"inserted": written, "already_present": len(wanted) - len(missing),
-            "unknown_cards": unknown}
+            "unknown_cards": unknown, "undated": undated}
 
 
 @app.get("/similar")

@@ -454,6 +454,15 @@ signal took three fixes, each found by inspecting what actually landed in the ta
 - **A settle timer.** A card that never leaves the viewport was never recorded, so the top
   of the feed was the least logged. Cards still visible after 8s are written then, which
   right-censors those values.
+- **Timestamps say when it happened, not when it was written.** `created_at` defaults to
+  `now()`, which is a batch interval late for an ordinary event and arbitrarily late for
+  anything flushed at page exit or recovered by a reconciliation. The client now stamps
+  `occurred_at` and the server stores it, within a sanity window so a wrong client clock
+  cannot reorder a history. This matters because the chronological split and the
+  profile-leakage guard both read `created_at` as truth. Two traps here: a batch mixing
+  rows with and without a timestamp gets sent explicit NULLs by PostgREST and is rejected
+  whole, so gaps are filled before insert; and likes recorded before the browser started
+  keeping times cannot be recovered at all, which is what `backfilled` marks.
 - **A second bar, applied at training time.** 0.9s of visibility is cheap on a three-column
   board: a steady scroll clears it on nearly every card, so most impressions were cards
   never actually looked at, and the negative class had no consistent meaning. The browser

@@ -32,6 +32,16 @@ the learned ranker (§6b). Logging is live (§5a) and the corpus is now 580 piec
 the model finally has both labels to learn from and enough distinct items to generalise
 over — at 18 pieces a classifier could only memorise 18 feature vectors.
 
+**Known cleanup (deliberately not done):** `recommend._popularity` returns `0.0` when a
+card has no `view_count`, which conflates "unmeasurable" with "unpopular" — IMSLP and
+MuseScore have no view metric, so they sort last. The blast radius is exactly one state:
+with zero signals, affinity rescales to all-zero and popularity becomes 100% of the
+ranking, so a user who has liked nothing sees 18 of 580 pieces (measured). One like and it
+self-corrects — 42 of 80 cards then come from the seeded corpus. Fixing it means treating
+missing popularity as neutral, which is a real trade rather than a free win: cold-start
+Home would flip from 18 video-rich pieces to a board dominated by 562 seeded IMSLP pieces,
+only 65% of which have a thumbnail.
+
 Open refinements elsewhere: YouTube `kind` via an LLM (see Open questions), the
 same-name/different-composition attribution residual, per-movement labeling (a resolved
 movement lands on its parent-work page), IMSLP thumbnails/PDF links, and **query

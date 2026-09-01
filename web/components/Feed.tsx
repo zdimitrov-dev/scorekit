@@ -74,8 +74,14 @@ export default function Feed({
 
       // Measure what is actually rendered, then place new cards one at a time, tracking
       // an estimate so a whole page doesn't pile into the same column.
+      //
+      // On a fresh list the columns are treated as empty rather than measured: the reset
+      // has not painted yet, so the DOM still holds the *previous* board and its tall
+      // columns would push the new cards into whichever columns the old list happened to
+      // leave short — a two-result search rendered into columns 3 and 4 with 1 and 2 blank.
       const next: FeedCard[][] = Array.from({ length: cols }, (_, i) => [...(prev[i] ?? [])]);
-      const heights = next.map((_, i) => colRefs.current[i]?.offsetHeight ?? 0);
+      const heights =
+        placed === 0 ? next.map(() => 0) : next.map((_, i) => colRefs.current[i]?.offsetHeight ?? 0);
       const estimate = heights.some((h) => h > 0)
         ? heights.reduce((a, b) => a + b, 0) / Math.max(1, placed)
         : 240;

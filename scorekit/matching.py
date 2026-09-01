@@ -37,7 +37,7 @@ DROP_THRESHOLD = 0.35
 # them forever. Without it, a query searched before a fix keeps its old, worse results
 # permanently: adding author matching fixed "Birru" for new queries while the already-
 # cached "Birru" went on returning the single wrong card it had matched by title.
-MATCHER_VERSION = 2
+MATCHER_VERSION = 3
 
 
 def _tokens(text: str) -> list[str]:
@@ -65,6 +65,28 @@ def _longest_run(needle: list[str], haystack: list[str]) -> int:
                 k += 1
             best = max(best, k)
     return best
+
+
+def _names_author(q: list[str], author: list[str]) -> bool:
+    """True if the query reads as this author's name.
+
+    Every query token must appear in the author **in order**, matching either a whole
+    token or the start of one, so shortened and partial names work the way people
+    actually type them: "Kat Cordova" names *Katherine Cordova*, "Rousseau" names
+    *Rousseau*. Requiring an exact contiguous run instead dropped 11 of 12 correct
+    results for that search.
+
+    Still strict enough to protect the filter: matching must be in order, and a prefix
+    needs three characters, so "Piano Sonata" does not name a channel called "Piano
+    Tutorials" and cannot rescue a card the title already rejected.
+    """
+    if not q or not author:
+        return False
+    i = 0
+    for token in author:
+        if i < len(q) and (token == q[i] or (len(q[i]) >= 3 and token.startswith(q[i]))):
+            i += 1
+    return i == len(q)
 
 
 def _text_score(q: list[str], text: list[str]) -> float:
@@ -124,7 +146,7 @@ def match_score(card: Card, query: str, composer: str | None = None) -> float:
     # tells us nothing about them. Deliberately placed after the number rule — when the
     # query *is* the artist, opus numbers in their video titles are irrelevant.
     at = _tokens(card.author or "")
-    author = 1.0 if at and _longest_run(q, at) == len(q) else 0.0
+    author = 1.0 if _names_author(q, at) else 0.0
     base = max(title, author)
 
     composer_boost = 0.0

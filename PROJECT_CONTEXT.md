@@ -633,13 +633,16 @@ so a "from {parent_work}" label / movement anchor is future UX (`parent_work` is
   absent, so a stamp-sized or broken image never lands in a masonry column.
 
 **Not every query names a piece.** `match_score` also scores the query against the card's
-**author**, but only when the whole query appears contiguously in it. Searching an artist
-("Birru", "Rousseau", "Patrik Pietschmann") returns that channel's uploads, whose titles
-never contain the artist's name — scoring titles alone gave all of them 0.0 and the filter
-discarded a perfect result set. The all-or-nothing rule keeps the filter's precision: a
-partial overlap with a channel name ("Piano Sonata" against "Piano Tutorials") is noise
-and cannot rescue a card the title rejected. Verified live: a cold "Patrik Pietschmann"
-search returns 23 of 24 cards from that channel.
+**author** (`_names_author`). Searching an artist ("Birru", "Rousseau", "Patrik
+Pietschmann") returns that channel's uploads, whose titles never contain the artist's
+name — scoring titles alone gave all of them 0.0 and the filter discarded a perfect result
+set. The match is all-or-nothing: every query token must appear in the author **in order**,
+as a whole token or the start of one, so shortened names work the way people type them —
+"Kat Cordova" names *Katherine Cordova*. Demanding an exact contiguous run instead dropped
+11 of 12 correct results for that search. It stays precise because order is required and a
+prefix needs three characters, so "Piano Sonata" does not name a channel called "Piano
+Tutorials" and cannot rescue a card the title rejected. Verified live: a cold "Patrik
+Pietschmann" search returns 23 of 24 cards from that channel; "Kat Cordova" returns 24.
 
 **Search caching (`_ingest_stream`) — cache on cards, per source, never on the piece row.**
 The stream used to decide "already ingested" from the existence of the *piece* row, so a piece
@@ -663,6 +666,11 @@ on returning the single wrong card it had matched by title.
 content when items are appended, so "Load more" visually reshuffled every card on screen.
 `Feed` assigns each card to the measurably shortest column once and never moves it;
 verified with 0 of 72 cards changing position across a Load more.
+
+A fresh list is placed as though the columns were **empty rather than measured**: the reset
+has not painted when the placement effect runs, so the DOM still holds the previous board,
+and its tall columns pushed new cards into whichever columns the old list happened to leave
+short — a two-result search rendered into columns 3 and 4 with 1 and 2 blank.
 
 `Feed` identifies its list by a **signature of card ids, never by array identity**. Callers
 build these arrays during render (`sortVideos(...)`, a filter), so the reference changes on

@@ -79,7 +79,19 @@ def test_artist_query_matches_on_author():
     assert (len(kept), dropped) == (3, 0)
 
 
-def test_author_match_requires_the_whole_query():
+def test_shortened_artist_names_still_match():
+    """Regression: "Kat Cordova" dropped 11 of 12 correct results, because an exact
+    contiguous run was required and "kat" is not "katherine". People type names short."""
+    cards = [
+        _card("Hans Zimmer - Interstellar EPIC PIANO SUITE", author="Katherine Cordova"),
+        _card("The Odyssey - Odysseus (Reimagined)", author="Katherine Cordova"),
+    ]
+    assert all(match_score(c, "Kat Cordova") == 1.0 for c in cards)
+    kept, dropped = annotate_and_filter(cards, "Kat Cordova")
+    assert (len(kept), dropped) == (2, 0)
+
+
+def test_author_match_stays_precise():
     # a partial overlap with a channel name must NOT rescue a card the title rejected,
     # or the filter loses the precision it exists for
     c = _card("Beethoven — Moonlight Sonata", author="Piano Tutorials")
@@ -88,6 +100,10 @@ def test_author_match_requires_the_whole_query():
     # the composer's surname alone does not make every upload by them a phrase match
     c = _card("Some Unrelated Work", author="Frédéric Chopin")
     assert match_score(c, "Chopin Nocturne") < DROP_THRESHOLD
+
+    # order matters, and a prefix needs enough characters to mean something
+    assert match_score(_card("x", author="Cordova Katherine"), "Kat Cordova") == 0.0
+    assert match_score(_card("x", author="Katherine Cordova"), "Ka Cordova") == 0.0
 
 
 def test_author_does_not_inflate_ordinary_piece_queries():

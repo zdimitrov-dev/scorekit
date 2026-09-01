@@ -246,9 +246,14 @@ schema change. It must be a **UUID**, because `interactions.user_id` is a uuid c
 anything else makes Postgres reject the entire batch.
 
 **What is logged.** `seen` when a card is genuinely viewed, `click` when it is opened (with
-how long it stayed open), `like`, `save`. Actions map onto the existing enum in
-`store.log_events` — `seen` becomes `skip`, which is exactly what the schema's own notes
-call the negative signal; `save` merges into `like` until `db/migrations/001` is applied.
+how long it stayed open), `like`, `save`. `db/migrations/001` **is applied**, so `seen`
+stores as `impression` and `save` is distinct from `like`. `impression` is deliberately not
+`skip`: once an explicit reject control exists, "passed over" and "rejected" carry
+different confidence, and collapsing them at write time would be unrecoverable.
+
+> **Do not clear the `cards` table once real interactions exist.** `interactions.card_id`
+> is `on delete set null`, so wiping the corpus preserves the events but severs them from
+> the features they describe — the labels survive as unusable rows.
 
 **Negatives come from impressions**, since the feed has no reject control: a card shown and
 passed over is the contrast a classifier needs. Quality of that signal took three fixes,
@@ -300,6 +305,13 @@ Three lessons are baked into it, each found by running it over the real corpus:
   surnames appearing across card titles outvote a lone author.
 - **A value needs corroboration** (≥2 cards) unless the piece's own title says it. One
   ragtime cover or one orchestral transcription must not redefine the work.
+
+**`format` (tutorial / cover / performance)** is what a piece's cards mostly *are*. It is a
+real taste dimension — wanting to learn a piece is not the same as wanting to hear it — and
+unlike composer or creator it generalises across pieces. It is also the only feature a
+non-classical entry may have: a "Coldplay piano" search had 45 cards and **zero** tags, so
+it could never be recommended or learned from however often it was liked. `score` and
+`listing` are excluded, since they describe the source rather than the music.
 
 A fourth rule came from testing artist queries: **a dominant YouTube channel becomes a
 `creator` tag.** Searching "Patrik Pietschmann" produces a piece with no composer, era or

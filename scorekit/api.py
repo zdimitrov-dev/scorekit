@@ -201,12 +201,44 @@ def interactions(batch: InteractionBatch) -> dict:
     return {"written": written, "ok": True}
 
 
+_PAGE = 1000
+
+
+def _all_cards(sb) -> list[dict]:
+    """Every card, paged.
+
+    A single capped query is the wrong shape here: PostgREST returns at most ~1000 rows,
+    and the cap is silent — past that the feed would rank an arbitrary slice of the corpus
+    and simply appear to get worse, with nothing to indicate why.
+    """
+    out: list[dict] = []
+    while True:
+        page = (
+            sb.table("cards").select(_CARD_SELECT + ",piece_id")
+            .range(len(out), len(out) + _PAGE - 1).execute().data
+            or []
+        )
+        out.extend(page)
+        if len(page) < _PAGE:
+            return out
+
+
 def _piece_tags(sb) -> dict[str, list[tuple[str, str]]]:
-    rows = sb.table("piece_tags").select("piece_id,key,value").execute().data or []
+    """Every piece's tags, paged for the same reason as ``_all_cards``: a silently
+    truncated tag table would drop pieces out of the feature space with no error."""
     tags: dict[str, list[tuple[str, str]]] = {}
-    for r in rows:
-        tags.setdefault(r["piece_id"], []).append((r["key"], r["value"]))
-    return tags
+    seen = 0
+    while True:
+        rows = (
+            sb.table("piece_tags").select("piece_id,key,value")
+            .range(seen, seen + _PAGE - 1).execute().data
+            or []
+        )
+        for r in rows:
+            tags.setdefault(r["piece_id"], []).append((r["key"], r["value"]))
+        seen += len(rows)
+        if len(rows) < _PAGE:
+            return tags
 
 
 @app.post("/recommend")
@@ -218,7 +250,7 @@ def recommend(req: RecommendRequest) -> dict:
     where they came from, so moving to the ``interactions`` table is a change here only.
     """
     sb = get_client()
-    cards = sb.table("cards").select(_CARD_SELECT + ",piece_id").limit(1000).execute().data or []
+    cards = _all_cards(sb)
     tags = _piece_tags(sb)
 
     # resolve the browser's card ids to piece ids

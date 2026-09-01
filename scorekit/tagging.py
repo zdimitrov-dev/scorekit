@@ -19,6 +19,8 @@ Tag keys currently produced:
 ``style``           IMSLP's own ``piece_style`` string, kept verbatim-ish
 ``instrumentation`` piano / organ / voice, piano / ...
 ``form``            nocturne / prelude / sonata / ... — inferred from titles
+``format``          tutorial / cover / performance — what kind of content it attracts
+``creator``         the channel an artist entry is about, when one dominates it
 ``public_domain``   "true" when a free score exists
 
 Values are lowercased and whitespace-collapsed so that "Organ" and "organ" are one tag.
@@ -282,6 +284,23 @@ def derive_tags(piece: dict[str, Any], cards: Iterable[dict[str, Any]]) -> set[t
     # What the piece title itself says is taken on trust — it is the work's own name.
     for form in _forms_in(piece.get("title") or "") | set(_corroborated(forms)):
         tags.add(("form", form))
+
+    # --- format -------------------------------------------------------------
+    # What *kind* of content a piece attracts — tutorials, covers, performances — is a
+    # real taste dimension (some people want to learn a piece, others to hear it) and it
+    # generalises across pieces, unlike composer or creator. It is also the only feature a
+    # non-classical entry may have: a search like "Coldplay piano" has no composer, no
+    # dominant channel and no classical form, so without this it carried *no tags at all*
+    # and could never be recommended or learned from however often it was liked.
+    #
+    # `score` and `listing` are excluded: they describe the source, not the piece — every
+    # MuseScore card is a listing, so it says nothing about what the music is.
+    kinds = Counter(
+        c["kind"] for c in cards
+        if c.get("kind") in {"tutorial", "cover", "performance"}
+    )
+    for kind in _corroborated(kinds):
+        tags.add(("format", kind))
 
     # --- creator ------------------------------------------------------------
     # When one channel accounts for most of a piece's videos, that channel *is* what the

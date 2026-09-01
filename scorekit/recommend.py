@@ -76,6 +76,7 @@ KEY_WEIGHTS: dict[str, float] = {
     "creator": 1.0,   # for artist entries, the channel is the whole point
     "era": 0.9,
     "form": 0.7,
+    "format": 0.6,   # wanting to *learn* a piece vs hear it played is a real preference
     "style": 0.4,
     "instrumentation": 0.25,
     "public_domain": 0.1,

@@ -59,18 +59,17 @@ def upsert_cards(piece_id: str, cards: list[Card], client: Any = None) -> int:
     return len(result.data)
 
 
-# What the feed reports -> what the `interaction_action` enum can currently store.
+# What the feed reports -> what the `interaction_action` enum stores.
 #
-# `seen` is a card that was scrolled into view and not engaged with: the implicit negative
-# the recommender trains against. It maps to `skip` because that is precisely what the
-# schema means by skip — "there is no explicit dislike; absence of engagement is the
-# signal". `save` merges into `like` until db/migrations/001 is applied, which splits both
-# of these out; nothing else has to change when it is.
+# `seen` is a card that was scrolled into view and not engaged with — the implicit negative
+# the recommender trains against. It is deliberately *not* `skip`: once an explicit reject
+# control exists, "passed over" and "rejected" carry different confidence and must be
+# weighted differently, and collapsing them at write time would be unrecoverable.
 _ACTION_MAP = {
-    "seen": "skip",
+    "seen": "impression",
     "skip": "skip",
     "like": "like",
-    "save": "like",
+    "save": "save",
     "click": "click",
 }
 

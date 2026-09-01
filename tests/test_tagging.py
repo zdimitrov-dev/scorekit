@@ -1,10 +1,10 @@
 from scorekit.tagging import CONFIDENT_MATCH, _surname, derive_tags, tag_rows
 
 
-def _card(source="imslp", author=None, title=None, score=1.0, **meta):
+def _card(source="imslp", author=None, title=None, kind=None, score=1.0, **meta):
     """A stored card row. ``score`` is the attribution match_score."""
     return {
-        "source": source, "author": author, "title": title,
+        "source": source, "author": author, "title": title, "kind": kind,
         "metadata": {**meta, "match_score": score},
     }
 
@@ -212,6 +212,29 @@ def test_a_normal_spread_of_performers_yields_no_creator():
         _card(source="youtube", author="Lang Lang", title="Clair de Lune"),
     ]
     assert not any(k == "creator" for k, _ in derive_tags(piece, cards))
+
+
+def test_dominant_content_kinds_become_format_tags():
+    """Regression: a "Coldplay piano" search had 45 cards and zero tags — no composer, no
+    dominant channel, no classical form — so it could never be recommended or learned
+    from. What kind of content a piece attracts is a real, generalisable feature."""
+    piece = {"title": "Coldplay piano", "composer": None}
+    cards = [
+        _card(source="youtube", kind="tutorial", title="The Scientist | EASY Piano Tutorial"),
+        _card(source="youtube", kind="tutorial", title="Clocks tutorial"),
+        _card(source="youtube", kind="cover", title="Clocks (EPIC piano cover)"),
+        _card(source="youtube", kind="cover", title="Yellow piano cover"),
+        _card(source="youtube", kind="performance", title="live at Wembley"),
+        _card(source="musescore", kind="listing", title="Coldplay sheet music"),
+        _card(source="musescore", kind="listing", title="Clocks sheet music"),
+    ]
+    tags = derive_tags(piece, cards)
+    assert ("format", "tutorial") in tags
+    assert ("format", "cover") in tags
+    # a source artifact, not a property of the music — every MuseScore card is a listing
+    assert not any(v == "listing" for _k, v in tags)
+    # a single performance is not what the piece is about
+    assert ("format", "performance") not in tags
 
 
 def test_bare_piece_produces_no_tags_rather_than_junk():

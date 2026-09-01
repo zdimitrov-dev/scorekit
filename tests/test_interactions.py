@@ -21,17 +21,19 @@ class _FakeClient:
         return self.tables.setdefault(name, _FakeTable())
 
 
-def test_seen_is_stored_as_the_negative_signal():
-    # the schema has no `impression` value; its own notes define skip as the negative
+def test_seen_is_an_impression_not_a_skip():
+    # "passed over" and "deliberately rejected" carry different confidence; collapsing
+    # them at write time would be unrecoverable later
     c = _FakeClient()
     log_events([{"user_id": "u1", "action": "seen", "card_id": "c1"}], client=c)
-    assert c.tables["interactions"].inserted[0]["action"] == "skip"
+    assert c.tables["interactions"].inserted[0]["action"] == "impression"
 
 
-def test_save_merges_into_like_until_the_migration_runs():
+def test_save_is_stored_distinctly_from_like():
+    # saving is a deliberate "keep this" and outweighs a like in SIGNAL_WEIGHTS
     c = _FakeClient()
     log_events([{"user_id": "u1", "action": "save", "card_id": "c1"}], client=c)
-    assert c.tables["interactions"].inserted[0]["action"] == "like"
+    assert c.tables["interactions"].inserted[0]["action"] == "save"
 
 
 def test_dwell_and_position_are_carried_through():

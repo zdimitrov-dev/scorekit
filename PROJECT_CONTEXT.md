@@ -412,9 +412,26 @@ reason is visible in the importances: the forest's top features are `affinity_ov
 already uses. What the model adds is learning the relative weight of each axis instead of
 being handed `KEY_WEIGHTS`, and that is worth about two points of AUC, not ten.
 
-Beating it properly needs a feature the heuristic structurally cannot use. `feed_position`
-is already logged and is the obvious candidate: without it, a card's chance of being seen
-is confounded with its rank, and both rankers are penalised by the same bias.
+**`feed_position` was tried and is off by default** (`--with-position`). Two findings, and
+the second matters more than the first.
+
+It did not help: forest 0.837 to 0.833 chronological, 0.866 to 0.860 cross-user, with
+precision@10 falling from 0.60 to 0.40. But that is not evidence against position bias.
+`jobs/simulate` assigns position with `rng.sample` and its like probability depends only on
+tags, so the synthetic data contains no position effect to find. The column is noise there,
+and an extra noise column costs a little accuracy. The test was fair to the feature and
+uninformative about the phenomenon.
+
+It also cannot be served. At training time the position is known; at ranking time it does
+not exist, because the scores are what decide it. `ml/serve` therefore refuses a model
+whose feature list contains it, rather than quietly feeding NaN into a column the model was
+told to trust and looking like a model that never helps.
+
+Doing this properly means treating position as a training-time correction rather than a
+feature: weight each row by the inverse probability that a card at that rank was examined
+at all, so a like from the bottom of the feed counts for more than one from the top. That
+needs the simulator to model examination as a function of rank first, otherwise there is
+still nothing to correct.
 
 **Promotion gate (`ml/registry.py`).** A fit is not automatically worth serving. On a small
 or skewed log it can rank worse than the heuristic and worse than chance, and promoting it

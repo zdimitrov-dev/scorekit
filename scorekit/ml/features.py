@@ -50,6 +50,19 @@ FEATURE_NAMES: list[str] = [
     "is_public_domain",
 ]
 
+# Where the card sat in the feed when it was logged.
+#
+# Kept apart from FEATURE_NAMES because it is not an ordinary feature. At training time it
+# is known; at serving time it does not exist yet, since the scores are what decide the
+# positions. A model that leans on it therefore looks better offline and gains nothing in
+# production, which is worth measuring rather than assuming. Off by default; enable with
+# ``feature_names(with_position=True)`` and the matching argument to ``features_for``.
+POSITION_FEATURE = "feed_position"
+
+
+def feature_names(with_position: bool = False) -> list[str]:
+    return [*FEATURE_NAMES, POSITION_FEATURE] if with_position else list(FEATURE_NAMES)
+
 
 class UserProfile:
     """What the model knows about a user: their engaged tags, weighted by signal strength."""
@@ -102,8 +115,15 @@ def features_for(
     piece_tags: dict[str, list[tuple[str, str]]],
     profile: UserProfile,
     weights: dict[tuple[str, str], float],
+    position: float | None = None,
+    with_position: bool = False,
 ) -> list[float]:
-    """One feature row. Order matches ``FEATURE_NAMES``."""
+    """One feature row. Order matches ``feature_names(with_position)``.
+
+    ``position`` is where the card sat in the feed, known only at training time. When
+    ``with_position`` is on and none is supplied the column is NaN, which is exactly what
+    serving would see.
+    """
     piece_id = card.get("piece_id") or (card.get("piece") or {}).get("id")
     tags = piece_tags.get(piece_id, [])
     meta = card.get("metadata") or {}
@@ -140,7 +160,8 @@ def features_for(
         float(bool(meta.get("is_compilation"))),
         float(bool(meta.get("has_sheet_music_link"))),
         float(any(k == "public_domain" for k, _ in tags)),
-    ]
+    ] + ([float(position) if position is not None else float("nan")]
+         if with_position else [])
 
 
 def corpus_weights(piece_tags: dict[str, list[tuple[str, str]]]) -> dict[tuple[str, str], float]:

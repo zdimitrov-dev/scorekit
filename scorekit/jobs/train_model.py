@@ -33,6 +33,9 @@ def main() -> None:
                         default="exclude",
                         help="what to do with rows written by jobs.simulate; excluded by "
                              "default so a synthetic taste can never promote a model")
+    parser.add_argument("--with-position", action="store_true",
+                        help="include feed_position, which exists at training time but "
+                             "not at serving time; an experiment, not a default")
     parser.add_argument("--tune", action="store_true",
                         help="cross-validate forest hyperparameters instead of the "
                              "hand-picked ones")
@@ -48,7 +51,8 @@ def main() -> None:
     # the gap between them is what says whether the model generalises to somebody it has
     # never seen, or has only learned the users it was handed.
     events, cards, tags, dropped = load_training_data(args.user, args.simulated)
-    data = build_dataset(events, cards, tags, corpus_weights(tags))
+    data = build_dataset(events, cards, tags, corpus_weights(tags),
+                         with_position=args.with_position)
     log.info("%d interactions, %d cards, %d tagged pieces", len(events), len(cards), len(tags))
     if dropped:
         log.info("(%d simulated rows excluded; --simulated %s)", dropped, args.simulated)
@@ -81,6 +85,7 @@ def main() -> None:
         user=args.user, test_frac=args.test_frac, mode="chronological",
         tune=args.tune, tune_iters=args.tune_iters, promote=args.promote,
         force=args.force, simulated=args.simulated,
+        with_position=args.with_position,
     )
     if run.importances:
         log.info("\n%s: what it leaned on (chronological fit)", run.best)

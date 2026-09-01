@@ -19,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from .features import FEATURE_NAMES, build_profile, features_for
+from .features import FEATURE_NAMES, build_profile, feature_names, features_for
 
 # A click held this long is treated as a positive on its own.
 LONG_CLICK_MS = 8000
@@ -72,6 +72,7 @@ def build_dataset(
     piece_tags: dict[str, list[tuple[str, str]]],
     weights: dict[tuple[str, str], float],
     warmup: float = 0.4,
+    with_position: bool = False,
 ) -> Dataset:
     """Rows from a user's chronologically ordered events.
 
@@ -87,7 +88,7 @@ def build_dataset(
     for e in events:
         by_user.setdefault(e["user_id"], []).append(e)
 
-    data = Dataset()
+    data = Dataset(feature_names=feature_names(with_position))
     for user_id, user_events in by_user.items():
         user_events.sort(key=lambda e: (e.get("created_at") or "", e.get("id") or 0))
         split = int(len(user_events) * warmup)
@@ -107,7 +108,9 @@ def build_dataset(
             if i >= split and card is not None and piece_id and not event.get("backfilled"):
                 profile = build_profile(positives, piece_tags, weights)
                 if is_positive(event) or is_negative(event):
-                    data.X.append(features_for(card, piece_tags, profile, weights))
+                    data.X.append(features_for(
+                        card, piece_tags, profile, weights,
+                        position=event.get("feed_position"), with_position=with_position))
                     data.y.append(1 if is_positive(event) else 0)
                     data.weight.append(_row_weight(event))
                     data.groups.append(user_id)

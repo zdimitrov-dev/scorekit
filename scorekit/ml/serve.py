@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Sequence
 
-from .features import build_profile, features_for
+from .features import POSITION_FEATURE, build_profile, features_for
 from .registry import load_model
 
 log = logging.getLogger("scorekit.ml.serve")
@@ -40,6 +40,14 @@ def score_cards(
     # An unpromoted model is only ever used when explicitly asked for, so testing one
     # cannot change what anybody else sees.
     if not loaded.promoted and not force:
+        return None
+    # A model fitted with feed_position cannot be served: the position does not exist yet
+    # at ranking time, since the scores are what decide it. Scoring would either raise on
+    # the column count or silently feed NaN into a column the model was told to trust.
+    # Refusing loudly beats a quiet fallback that looks like the model simply never helps.
+    if POSITION_FEATURE in (loaded.feature_names or []):
+        log.warning("saved model was trained with %s, which is unavailable at serving "
+                    "time; using the content ranker", POSITION_FEATURE)
         return None
     if not positives:
         # A model trained on engagement has nothing to say about someone with none. Cold

@@ -282,3 +282,42 @@ def test_backfilled_rows_seed_the_profile_but_are_never_labelled():
     assert len(data) == 1 and data.y == [0]
     # ...but the backfilled likes still shaped the profile it was scored against.
     assert dict(zip(FEATURE_NAMES, data.X[0]))["affinity_composer"] > 0
+
+
+# --- feed_position ----------------------------------------------------------
+
+def test_feed_position_is_off_by_default():
+    """It exists at training time and not at serving time, so it is an experiment rather
+    than a default. See test_a_model_trained_on_position_is_refused."""
+    from scorekit.ml.features import FEATURE_NAMES, POSITION_FEATURE, feature_names
+    assert POSITION_FEATURE not in FEATURE_NAMES
+    assert POSITION_FEATURE not in feature_names()
+    assert feature_names(with_position=True)[-1] == POSITION_FEATURE
+
+
+def test_position_is_nan_when_it_is_not_known():
+    """Which is every call at serving time: the scores are what decide the position."""
+    from scorekit.ml.features import features_for
+    profile = build_profile([("chopin-1", 1.0)], PIECE_TAGS, W)
+    row = features_for(_card("chopin-2"), PIECE_TAGS, profile, W, with_position=True)
+    assert math.isnan(row[-1])
+    row = features_for(_card("chopin-2"), PIECE_TAGS, profile, W,
+                       position=7, with_position=True)
+    assert row[-1] == 7.0
+
+
+def test_a_model_trained_on_position_is_refused(monkeypatch):
+    """Serving it would feed NaN into a column the model was told to trust. Falling back
+    loudly beats a model that quietly appears never to help."""
+    from scorekit.ml import serve
+    from scorekit.ml.features import feature_names
+    from scorekit.ml.registry import LoadedModel
+
+    class _Const:
+        def predict_proba(self, rows):
+            import numpy as np
+            return np.array([[0.3, 0.7] for _ in rows])
+
+    loaded = LoadedModel(_Const(), feature_names(with_position=True), {"passed_gate": True})
+    monkeypatch.setattr(serve, "load_model", lambda: loaded)
+    assert serve.score_cards([_card("chopin-1")], PIECE_TAGS, W, [("chopin-1", 1.0)]) is None

@@ -102,6 +102,7 @@ def run_training(
     promote: bool = False,
     force: bool = False,
     simulated: str = "exclude",
+    with_position: bool = False,
 ) -> TrainingRun:
     """Fit the candidates, judge them against the heuristic, and save if asked.
 
@@ -109,7 +110,8 @@ def run_training(
     promoted so the feed will not use it unless a request names it.
     """
     events, cards, tags, dropped = load_training_data(user, simulated)
-    data = build_dataset(events, cards, tags, corpus_weights(tags))
+    data = build_dataset(events, cards, tags, corpus_weights(tags),
+                         with_position=with_position)
     run = TrainingRun(dataset=label_summary(data), positives=data.positives,
                       rows=len(data), excluded_simulated=dropped)
     if data.positives == 0:

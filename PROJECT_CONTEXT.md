@@ -388,20 +388,33 @@ pooled 70/30 cut put every test row inside a single user, because rows are group
 silently measuring cross-user generalisation while claiming to measure next-behaviour
 prediction. Both modes are reported.
 
-Results on simulated personas (`jobs/simulate.py` writes interactions from a written-down
-taste, so the model can be checked against ground truth rather than only a metric):
+Results on simulated personas. `jobs/simulate.py` writes interactions from a written-down
+taste, which is the only way to judge a ranker before there is traffic: with real logs
+there is no ground truth, only a metric that may be high for the wrong reasons. Twelve
+personas, some deliberately overlapping, 500 events each spread over twenty days, with a
+like rate near one in ten so an easy class balance does not flatter every metric.
 
 | model | AUC, same users | AUC, held-out users |
 |---|---|---|
-| heuristic (tag affinity) | 0.842 | 0.803 |
-| random forest | 0.950 | 0.839 |
-| xgboost | 0.920 | 0.819 |
-| logistic regression | 0.909 | 0.784 |
+| heuristic (tag affinity) | 0.823 | 0.844 |
+| random forest (tuned) | **0.840** | 0.862 |
+| random forest | 0.837 | **0.866** |
+| logistic regression | 0.837 | 0.843 |
+| xgboost | 0.823 | 0.836 |
 
-Random Forest beats XGBoost in both modes, which is why three models are fitted rather
-than assuming boosting wins on tabular data. Trained per persona and asked to rank the
-whole corpus, it puts 10/10, 10/10 and 9/10 of each persona's own repertoire in the top
-ten.
+Random Forest is the best model in both modes, and beats XGBoost in both, which is why
+several models are fitted rather than assuming boosting wins on tabular data.
+
+**The gate declines it anyway**, and that is the result worth reading. The margin over the
+heuristic is +0.017 on the split promotion is judged on, well under the 0.03 required. The
+reason is visible in the importances: the forest's top features are `affinity_overall`,
+`seen_composer_before` and `affinity_composer` — nearly the same information the heuristic
+already uses. What the model adds is learning the relative weight of each axis instead of
+being handed `KEY_WEIGHTS`, and that is worth about two points of AUC, not ten.
+
+Beating it properly needs a feature the heuristic structurally cannot use. `feed_position`
+is already logged and is the obvious candidate: without it, a card's chance of being seen
+is confounded with its rank, and both rankers are penalised by the same bias.
 
 **Promotion gate (`ml/registry.py`).** A fit is not automatically worth serving. On a small
 or skewed log it can rank worse than the heuristic and worse than chance, and promoting it

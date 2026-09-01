@@ -42,10 +42,12 @@ def _page(sb, table: str, select: str, **eq) -> list[dict[str, Any]]:
 
 
 def load_training_data(user: str | None = None, simulated: str = "exclude"):
-    """Everything a fit needs, with simulated rows handled as asked.
+    """Everything a fit needs, plus how many rows the simulated filter removed.
 
     ``simulated`` is "exclude" by default so a taste invented by ``jobs.simulate`` can never
-    count toward the promotion gate.
+    count toward the promotion gate. The dropped count is returned because "no positive
+    examples" is a confusing thing to be told while the log visibly holds thousands of
+    likes, and the difference between the two is entirely this filter.
     """
     from ..jobs.simulate import simulated_user_ids
 
@@ -65,11 +67,12 @@ def load_training_data(user: str | None = None, simulated: str = "exclude"):
         tags.setdefault(t["piece_id"], []).append((t["key"], t["value"]))
 
     sim = simulated_user_ids()
+    before = len(events)
     if simulated == "exclude":
         events = [e for e in events if e["user_id"] not in sim]
     elif simulated == "only":
         events = [e for e in events if e["user_id"] in sim]
-    return events, cards, tags
+    return events, cards, tags, before - len(events)
 
 
 @dataclass
@@ -85,6 +88,7 @@ class TrainingRun:
     best: str = ""
     gate_reason: str = ""
     heuristic_auc: float = float("nan")
+    excluded_simulated: int = 0
     scores: list[dict[str, Any]] = field(default_factory=list)
     importances: list[tuple[str, float]] = field(default_factory=list)
 
@@ -104,12 +108,19 @@ def run_training(
     ``promote`` saves only when the gate passes; ``force`` saves regardless, marked as not
     promoted so the feed will not use it unless a request names it.
     """
-    events, cards, tags = load_training_data(user, simulated)
+    events, cards, tags, dropped = load_training_data(user, simulated)
     data = build_dataset(events, cards, tags, corpus_weights(tags))
-    run = TrainingRun(dataset=label_summary(data), positives=data.positives, rows=len(data))
+    run = TrainingRun(dataset=label_summary(data), positives=data.positives,
+                      rows=len(data), excluded_simulated=dropped)
     if data.positives == 0:
-        run.message = ("No positive examples yet. Like something in the feed, or run "
-                       "scorekit.jobs.simulate for a synthetic taste.")
+        run.message = (
+            f"No positive examples. {dropped} simulated rows were excluded, which is the "
+            "default so an invented taste cannot promote a model; train on them "
+            "deliberately, or like some pieces in the feed."
+            if dropped else
+            "No positive examples yet. Like something in the feed, or run "
+            "scorekit.jobs.simulate for a synthetic taste."
+        )
         return run
 
     results = train_all(data, test_frac, mode)

@@ -410,6 +410,9 @@ class TrainRequest(BaseModel):
     # Save a fit that failed the gate, marked unpromoted, so the toggle can try it.
     force: bool = True
     mode: str = "chronological"
+    # "exclude" (default), "include" or "only" for rows written by jobs.simulate. The
+    # dashboard offers "only" so a ranker can be judged before there is any real traffic.
+    simulated: str = "exclude"
 
 
 @app.post("/dev/train")
@@ -419,7 +422,8 @@ def dev_train(req: TrainRequest) -> dict:
     Not synchronous: a tuned run takes about forty seconds, which no browser should be
     asked to hold a request open for.
     """
-    started = start_training(mode=req.mode, tune=req.tune, force=req.force)
+    started = start_training(mode=req.mode, tune=req.tune, force=req.force,
+                             simulated=req.simulated)
     return {"started": started, **_train_status()}
 
 

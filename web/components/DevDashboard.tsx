@@ -181,14 +181,14 @@ export default function DevDashboard() {
   const [trainMsg, setTrainMsg] = useState("");
 
   const retrain = useCallback(
-    async (tune: boolean) => {
+    async (tune: boolean, simulated: "exclude" | "only" = "exclude") => {
       setTraining(true);
       setTrainMsg(tune ? "Searching hyperparameters…" : "Fitting…");
       try {
         await fetch("/api/dev/train", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ tune }),
+          body: JSON.stringify({ tune, simulated }),
         });
         for (let i = 0; i < 120; i++) {
           await new Promise((r) => setTimeout(r, 2000));
@@ -368,6 +368,17 @@ export default function DevDashboard() {
               >
                 <Play size={13} />
                 {training ? "Training…" : "Retrain with tuning (about 40s)"}
+              </button>
+              {/* Simulated users have a written-down taste, so a ranker can be judged
+                  before there is any real traffic. Excluded from the other two buttons so
+                  an invented taste can never promote a model onto a real feed. */}
+              <button
+                onClick={() => void retrain(true, "only")}
+                disabled={training}
+                className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--surface-2)] px-3 py-2 text-xs font-medium transition-colors hover:text-[var(--foreground)] disabled:opacity-40"
+              >
+                <Play size={13} />
+                {training ? "Training…" : "Retrain on simulated users"}
               </button>
               {trainMsg && (
                 <p className="pt-1 text-xs leading-relaxed text-[var(--muted)]">{trainMsg}</p>

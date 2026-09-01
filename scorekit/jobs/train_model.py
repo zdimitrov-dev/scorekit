@@ -47,9 +47,11 @@ def main() -> None:
     # Both splits are reported even though only the chronological one decides promotion:
     # the gap between them is what says whether the model generalises to somebody it has
     # never seen, or has only learned the users it was handed.
-    events, cards, tags = load_training_data(args.user, args.simulated)
+    events, cards, tags, dropped = load_training_data(args.user, args.simulated)
     data = build_dataset(events, cards, tags, corpus_weights(tags))
     log.info("%d interactions, %d cards, %d tagged pieces", len(events), len(cards), len(tags))
+    if dropped:
+        log.info("(%d simulated rows excluded; --simulated %s)", dropped, args.simulated)
     log.info("dataset: %s", label_summary(data))
     if data.positives == 0:
         raise SystemExit(

@@ -121,6 +121,41 @@ def test_already_engaged_pieces_can_be_excluded():
     assert {c["piece_id"] for c in ranked} == {"debussy", "bach"}
 
 
+def test_tag_match_beats_a_far_more_popular_unrelated_card():
+    """Regression: raw cosine (~0.15 for a real neighbour) and popularity (~0.85 for any
+    popular video) were blended directly, so popularity outweighed the *best possible*
+    tag match and the "personalized" feed was a popularity feed with a nudge."""
+    cards = [
+        _card("chopin-2", views=1_000),          # the genuine neighbour, barely watched
+        _card("bach", views=50_000_000),         # unrelated, wildly popular
+    ]
+    ranked = rank_cards(cards, PIECE_TAGS, signals=[("chopin-1", "like")],
+                        exclude_piece_ids=["chopin-1"])
+    assert [c["piece_id"] for c in ranked][0] == "chopin-2"
+
+
+def test_weights_are_a_real_proportion_after_rescaling():
+    # the top match should clear an unrelated card by roughly the taste share of the
+    # blend, not be swamped by a popularity term on a different scale
+    cards = [_card("chopin-2", views=1_000), _card("bach", views=50_000_000)]
+    ranked = rank_cards(cards, PIECE_TAGS, signals=[("chopin-1", "like")],
+                        exclude_piece_ids=["chopin-1"])
+    top, other = (c["metadata"]["rec"]["score"] for c in ranked)
+    assert top - other > 0.5
+
+
+def test_engaged_cards_are_held_back_but_their_piece_is_not():
+    """Liking a piece should surface *more* of it. Excluding the whole piece meant
+    liking a Liszt étude removed every Liszt card, which reads as the like being ignored."""
+    cards = [_card("chopin-1", cid="liked"), _card("chopin-1", cid="sibling"),
+             _card("bach", cid="b1")]
+    ranked = rank_cards(cards, PIECE_TAGS, signals=[("chopin-1", "like")],
+                        exclude_card_ids=["liked"])
+    ids = [c["id"] for c in ranked]
+    assert "liked" not in ids
+    assert ids[0] == "sibling"
+
+
 def test_cold_start_falls_back_to_popularity():
     cards = [_card("bach", views=10), _card("debussy", views=5_000_000)]
     ranked = rank_cards(cards, PIECE_TAGS, signals=[], limit=2)
@@ -128,12 +163,17 @@ def test_cold_start_falls_back_to_popularity():
     assert ranked[0]["metadata"]["rec"]["affinity"] == 0.0
 
 
-def test_diversify_breaks_up_a_run_of_one_piece():
-    # eight cards for the liked piece's twin, one for something else
-    cards = [_card("chopin-2", cid=f"c{i}", views=1000) for i in range(8)]
-    cards.append(_card("bach", cid="bach-1", views=1000))
-    ranked = rank_cards(cards, PIECE_TAGS, signals=[("chopin-1", "like")], limit=3)
-    assert [c["piece_id"] for c in ranked[:2]] == ["chopin-2", "bach"]
+def test_liked_material_leads_the_feed_then_yields():
+    """Liking several cards of one thing should put more of that thing near the top —
+    a flat diversity penalty surfaced exactly one and buried the rest, which reads as
+    the likes being ignored. It must still yield eventually rather than own the board."""
+    cards = [_card("chopin-2", cid=f"c{i}", views=1000) for i in range(10)]
+    cards += [_card("bach", cid=f"b{i}", views=1000) for i in range(10)]
+    ranked = rank_cards(cards, PIECE_TAGS, signals=[("chopin-1", "like")], limit=12)
+    order = [c["piece_id"] for c in ranked]
+
+    assert order[:3] == ["chopin-2"] * 3      # the liked material leads
+    assert "bach" in order[:8]                # but does not own the board
 
 
 def test_scores_are_explainable():

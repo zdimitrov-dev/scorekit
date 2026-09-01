@@ -273,6 +273,12 @@ profile → score → blend → diversify.
 - **Profile:** liked/saved pieces become a weighted tag vector. `save` (1.5) outweighs
   `like` (1.0); `skip` is the negative (−0.8) — there is no dislike button. The vector is
   L2-normalised so a heavy user isn't compared on a different scale to a new one.
+- **Rescale before blending:** affinity and popularity are min-maxed across the candidate
+  pool first, or `POPULARITY_WEIGHT` is not a real proportion. Raw cosine between two
+  genuinely related pieces is ~0.15 however related they are (they share one tag of
+  three), while any popular video sits at 0.75–0.85 popularity — so blending directly let
+  popularity outweigh the *best possible* tag match, and the "personalized" feed was a
+  popularity feed with a nudge.
 - **Score:** tag affinity weighted by **IDF × `KEY_WEIGHTS`**. IDF measures rarity;
   `KEY_WEIGHTS` measures what a *kind* of tag says about taste, and the two are not the
   same. Sharing a composer means far more than sharing an instrument — and in piano
@@ -288,10 +294,17 @@ profile → score → blend → diversify.
 Every returned card carries a `metadata.rec` breakdown (`affinity`, `popularity`,
 `score`) so the ordering can be explained and debugged instead of being opaque.
 
-- **Diversify:** `PIECE_PENALTY` is sized against the score range, not tuned small, so a
-  repeat has to be *much* better than an unseen piece to take the slot. A gentler penalty
-  let one strongly-matching piece take consecutive slots and the board stopped reading
-  like a feed.
+- **Diversify:** repeats fade **multiplicatively** (`PIECE_DECAY`, `GROUP_DECAY`), plus a
+  hard `MAX_CONSECUTIVE_PER_PIECE` ceiling. Subtracting a flat penalty was wrong in both
+  directions: scores live in [0, 1] after rescaling, so a penalty big enough to prevent a
+  wall drove the *second* card of a liked piece to zero — liking several Birru uploads
+  surfaced exactly one and buried the rest, which reads as the likes being ignored — while
+  a penalty small enough to avoid that let one piece own the board. A decay has no such
+  cliff; the ceiling makes the variety guarantee absolute even when everything else scores
+  near zero (a thin corpus, or a profile nothing else matches).
+- **Engaged *cards* are held back, not their pieces.** Excluding the whole piece meant
+  liking a Liszt étude removed every Liszt card from the feed. Liking something should
+  surface more of it.
 
 **Tagging runs at ingest, not only as a batch job.** `store.retag_piece()` is called per
 source inside `_ingest_stream` (per source rather than once at the end, since a client
@@ -305,10 +318,11 @@ the request body because likes/saves still live in `localStorage` (auth is Phase
 ranker is indifferent to their origin, so switching to the `interactions` table is a
 change in `api.py` only, not in the algorithm.
 
-Verified end-to-end through the UI on a corpus rebuilt from scratch: liking a Chopin
-nocturne makes **Liszt's La Campanella** the top card on the home feed (nearest romantic
-neighbour, with the liked piece itself held back); liking Debussy surfaces Satie; skipping
-Bach drives it to −1.00 affinity.
+Verified end-to-end through the UI with a composer absent from the corpus: searching
+**Grieg**, liking four cards from the results, then opening Home gives a board whose top
+three cards are all Grieg, followed by romantic neighbours (Liszt, Chopin, Rachmaninoff)
+and more Grieg at slot 8 — the consecutive ceiling visibly at work. Home re-ranks on every
+mount, and a **Refresh feed** control rebuilds it on demand.
 
 ---
 
@@ -649,6 +663,16 @@ on returning the single wrong card it had matched by title.
 content when items are appended, so "Load more" visually reshuffled every card on screen.
 `Feed` assigns each card to the measurably shortest column once and never moves it;
 verified with 0 of 72 cards changing position across a Load more.
+
+`Feed` identifies its list by a **signature of card ids, never by array identity**. Callers
+build these arrays during render (`sortVideos(...)`, a filter), so the reference changes on
+every parent re-render — including the one caused by opening a card. Keying the layout
+reset on identity wiped the board on click and unmounted the card mid-transition, which is
+why the modal appeared not to open at all. The callers memoize their arrays too.
+
+**The recent-searches panel opens on click, not focus.** The search input autofocuses, so
+opening on focus put the panel over the top row of results on every visit to `/search` and
+swallowed clicks meant for those cards.
 - **API (`scorekit/api.py`, FastAPI):** `GET /search` (blocking) and `GET /search/stream`
   (NDJSON per-source batches, each persisted before streaming). The Next route
   `/api/search` proxies the stream server-to-server (`web/.env.local` `SCOREKIT_API_URL`

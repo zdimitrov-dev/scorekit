@@ -157,8 +157,10 @@ class Signal(BaseModel):
 class RecommendRequest(BaseModel):
     signals: list[Signal] = Field(default_factory=list)
     limit: int = 60
-    # Whether to hold back pieces the user has already engaged with. On by default:
-    # a home feed that re-serves what you just saved is not a recommendation.
+    # Hold back the exact cards already engaged with — not their whole piece. Excluding
+    # the piece meant liking a Liszt étude removed every Liszt card from the feed, which
+    # reads as the recommender ignoring the like. Liking a piece should surface *more* of
+    # it, and the diversity pass stops that becoming a wall of one piece.
     exclude_seen: bool = True
 
 
@@ -185,23 +187,27 @@ def recommend(req: RecommendRequest) -> dict:
     # resolve the browser's card ids to piece ids
     by_card = {c["id"]: c.get("piece_id") for c in cards}
     signals: list[tuple[str, str]] = []
-    seen: set[str] = set()
+    seen_cards: set[str] = set()
+    unknown = 0
     for s in req.signals:
         piece_id = by_card.get(s.card_id)
         if not piece_id:
+            # a like on a card that no longer exists (e.g. the corpus was rebuilt)
+            unknown += 1
             continue
         signals.append((piece_id, s.action))
-        if s.action != "skip":
-            seen.add(piece_id)
+        seen_cards.add(s.card_id)
 
     ranked = rank_cards(
         cards, tags, signals=signals, limit=req.limit,
-        exclude_piece_ids=seen if req.exclude_seen else (),
+        exclude_card_ids=seen_cards if req.exclude_seen else (),
     )
     return {
         "cards": ranked,
         "personalized": bool(signals),
         "tagged_pieces": len(tags),
+        # surfaced so a feed that silently stopped personalising is diagnosable
+        "unknown_signals": unknown,
     }
 
 

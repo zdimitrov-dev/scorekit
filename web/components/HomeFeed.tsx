@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Loader2, RefreshCw, Sparkles } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
 import Feed from "./Feed";
 
@@ -29,57 +29,72 @@ export default function HomeFeed({ fallback }: { fallback: FeedCard[] }) {
   const [personalized, setPersonalized] = useState(false);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [signalCount, setSignalCount] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      const signals = [
-        ...readIds("scorekit:likes").map((card_id) => ({ card_id, action: "like" })),
-        ...readIds("scorekit:saves").map((card_id) => ({ card_id, action: "save" })),
-      ];
-      try {
-        const res = await fetch("/api/recommend", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ signals, limit: 80 }),
-        });
-        const data = (await res.json()) as RecResponse;
-        if (cancelled) return;
-        if (!res.ok || !Array.isArray(data.cards)) throw new Error(data.error);
-        setCards(data.cards);
-        setPersonalized(data.personalized);
-      } catch {
-        // the server-rendered board is already on screen — keep it rather than blanking
-        if (!cancelled) setFailed(true);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+  const refresh = useCallback(async () => {
+    const likes = readIds("scorekit:likes");
+    const saves = readIds("scorekit:saves");
+    const signals = [
+      ...likes.map((card_id) => ({ card_id, action: "like" })),
+      ...saves.map((card_id) => ({ card_id, action: "save" })),
+    ];
+    setSignalCount(signals.length);
+    setLoading(true);
+    try {
+      const res = await fetch("/api/recommend", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ signals, limit: 80 }),
+      });
+      const data = (await res.json()) as RecResponse;
+      if (!res.ok || !Array.isArray(data.cards)) throw new Error(data.error);
+      setCards(data.cards);
+      setPersonalized(data.personalized);
+      setFailed(false);
+    } catch {
+      // the board already on screen stays — better than blanking the page
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  // Re-rank on every mount, so navigating back from a search picks up what was liked
+  // there without needing a page reload.
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   return (
     <div>
-      <div className="mb-4 flex items-center gap-2 text-xs text-[var(--muted)]">
-        {loading ? (
-          <>
-            <Loader2 size={14} className="animate-spin" />
-            Building your feed…
-          </>
-        ) : personalized ? (
-          <>
-            <Sparkles size={14} className="text-[var(--accent)]" />
-            Picked from what you’ve liked and saved
-          </>
-        ) : failed ? (
-          "Showing the latest — recommendations are offline."
-        ) : (
-          "Popular right now — like a few pieces to tune this feed."
-        )}
+      <div className="mb-4 flex items-center justify-between gap-3 text-xs text-[var(--muted)]">
+        <span className="flex items-center gap-2">
+          {loading ? (
+            <>
+              <Loader2 size={14} className="animate-spin" />
+              Building your feed…
+            </>
+          ) : personalized ? (
+            <>
+              <Sparkles size={14} className="text-[var(--accent)]" />
+              Picked from {signalCount} {signalCount === 1 ? "piece" : "pieces"} you’ve
+              liked and saved
+            </>
+          ) : failed ? (
+            "Showing the latest — recommendations are offline."
+          ) : (
+            "Popular right now — like a few pieces to tune this feed."
+          )}
+        </span>
+        <button
+          onClick={() => void refresh()}
+          disabled={loading}
+          title="Rebuild the feed from everything you've liked and saved since"
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--surface-2)] px-3 py-1.5 font-medium transition-colors hover:text-[var(--foreground)] disabled:opacity-40"
+        >
+          <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          Refresh feed
+        </button>
       </div>
       <Feed cards={cards} emptyLabel="Nothing here yet — search for a piece to get started." />
     </div>

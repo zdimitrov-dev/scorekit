@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import type { FeedCard } from "@/lib/types";
 import PieceCard from "./PieceCard";
@@ -52,34 +52,46 @@ export default function Feed({
   const cols = useColumnCount();
   const select = onSelect ?? setSelected;
 
-  // A different list (new search, new sort, new recommendations) or a column-count change
-  // starts the layout over; only appended cards should preserve their placement.
+  // Identify the list by its contents, never by array identity. Callers build these
+  // arrays during render (`sortVideos(...)`, a filter), so the reference changes on every
+  // parent re-render — including one caused by opening a card. Keying the reset on
+  // identity therefore wiped the board on click and unmounted the card mid-transition,
+  // which is why the modal never appeared.
+  const signature = useMemo(() => cards.map((c) => c.id).join("|"), [cards]);
+
+  // A genuinely different list, or a column-count change, starts the layout over; only
+  // appended cards preserve their placement.
   useEffect(() => {
     setColumns([]);
     setVisible(PAGE);
-  }, [cards, cols]);
+  }, [signature, cols]);
 
   useEffect(() => {
-    const placed = columns.reduce((n, c) => n + c.length, 0);
-    const incoming = cards.slice(placed, visible);
-    if (incoming.length === 0) return;
+    setColumns((prev) => {
+      const placed = prev.reduce((n, c) => n + c.length, 0);
+      const incoming = cards.slice(placed, visible);
+      if (incoming.length === 0) return prev;
 
-    // Measure what is actually rendered, then place the new cards one at a time,
-    // tracking an estimate so a whole page doesn't pile into the same column.
-    const next: FeedCard[][] = Array.from({ length: cols }, (_, i) => columns[i] ?? []);
-    const heights = next.map((_, i) => colRefs.current[i]?.offsetHeight ?? 0);
-    const estimate = heights.some((h) => h > 0)
-      ? heights.reduce((a, b) => a + b, 0) / Math.max(1, placed)
-      : 240;
+      // Measure what is actually rendered, then place new cards one at a time, tracking
+      // an estimate so a whole page doesn't pile into the same column.
+      const next: FeedCard[][] = Array.from({ length: cols }, (_, i) => [...(prev[i] ?? [])]);
+      const heights = next.map((_, i) => colRefs.current[i]?.offsetHeight ?? 0);
+      const estimate = heights.some((h) => h > 0)
+        ? heights.reduce((a, b) => a + b, 0) / Math.max(1, placed)
+        : 240;
 
-    for (const card of incoming) {
-      let target = 0;
-      for (let c = 1; c < cols; c++) if (heights[c] < heights[target]) target = c;
-      next[target].push(card);
-      heights[target] += estimate;
-    }
-    setColumns(next);
-  }, [cards, visible, cols, columns]);
+      for (const card of incoming) {
+        let target = 0;
+        for (let c = 1; c < cols; c++) if (heights[c] < heights[target]) target = c;
+        next[target].push(card);
+        heights[target] += estimate;
+      }
+      return next;
+    });
+    // `columns` is intentionally absent: the functional update reads it without making
+    // this effect re-run on every placement.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, visible, cols]);
 
   if (cards.length === 0) {
     return <p className="py-24 text-center text-[var(--muted)]">{emptyLabel ?? "No cards yet."}</p>;
@@ -96,11 +108,13 @@ export default function Feed({
             }}
             className="flex-1 min-w-0"
           >
-            {(columns[i] ?? []).map((card) => (
+            {(columns[i] ?? []).map((card, j) => (
               <PieceCard
                 key={card.id}
                 card={card}
-                index={cards.indexOf(card)}
+                // position within its own column — only used to stagger the entry
+                // animation, and stable so a card never re-animates on re-render
+                index={j}
                 onSelect={select}
               />
             ))}

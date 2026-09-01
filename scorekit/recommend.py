@@ -37,16 +37,32 @@ SIGNAL_WEIGHTS: dict[str, float] = {
 
 # Share of the final score that comes from popularity rather than tag match. Small but
 # non-zero: it breaks ties sensibly and keeps a brand-new profile from ranking randomly.
+#
+# This weight only means what it says because both terms are rescaled across the candidate
+# pool first (see `_rescale`). Raw cosine and the popularity measure live on completely
+# different scales: two pieces sharing one of three tags score ~0.15 by cosine no matter
+# how related they are, while any popular video sits at 0.75-0.85 popularity. Blending
+# those directly let popularity outweigh the *best possible* tag match, so a "personalized"
+# feed was a popularity feed with a nudge.
 POPULARITY_WEIGHT = 0.15
 
-# A board that is 20 cards of one piece is a worse feed than a slightly less "relevant"
-# one, so repeats of an already-shown piece/composer are penalised as the list is built.
-# Sized against the score range rather than tuned small: a repeat has to be *much* better
-# than an unseen piece to take the slot, which in practice means the feed works through
-# the corpus before doubling back. A gentler penalty let a strongly-matching piece take
-# consecutive slots and the board stopped looking like a feed.
-PIECE_PENALTY = 1.0
-COMPOSER_PENALTY = 0.35
+# Repeats of an already-shown piece (or composer/creator) fade **multiplicatively** as the
+# list is built, so a strongly-matching piece leads with several cards and then yields.
+#
+# Subtracting a flat penalty instead was wrong in both directions. Scores live in [0, 1]
+# after rescaling, so a penalty large enough to prevent a wall of one piece (1.0) drove the
+# second card straight to zero — liking several Birru uploads surfaced exactly one of them
+# and buried the rest under unrelated cards, which reads as the likes being ignored. A
+# penalty small enough to avoid that let one piece own the whole board. A decay has no such
+# cliff: it keeps liked material clustered near the top without letting it run forever.
+PIECE_DECAY = 0.72
+GROUP_DECAY = 0.85
+
+# Hard ceiling on how many cards of one piece may sit consecutively. The decay alone is a
+# *relative* rule, so when everything else scores near zero — a thin corpus, or a cold
+# profile where nothing else matches at all — a single piece can still take every slot.
+# This makes the guarantee absolute and independent of how the scores happen to fall.
+MAX_CONSECUTIVE_PER_PIECE = 3
 
 
 # How much each kind of tag expresses *taste*, independent of how rare it happens to be.
@@ -136,36 +152,72 @@ def _popularity(card: dict[str, Any]) -> float:
     return min(1.0, math.log10(1 + views) / 8.0) if views > 0 else 0.0
 
 
+def _rescale(values: Sequence[float]) -> list[float]:
+    """Min-max the values into [0, 1] so they can be blended meaningfully.
+
+    An all-equal input (notably every affinity being 0.0, the cold-start case) collapses
+    to all-zero rather than dividing by zero — which correctly makes that signal carry no
+    information and hands the ordering to the other term.
+    """
+    if not values:
+        return []
+    lo, hi = min(values), max(values)
+    if hi - lo < 1e-9:
+        return [0.0] * len(values)
+    return [(v - lo) / (hi - lo) for v in values]
+
+
 def rank_cards(
     cards: Sequence[dict[str, Any]],
     piece_tags: dict[str, list[tuple[str, str]]],
     signals: Iterable[tuple[str, str]] = (),
     limit: int = 60,
     exclude_piece_ids: Iterable[str] = (),
+    exclude_card_ids: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     """Rank ``cards`` for a user, most relevant first.
 
-    Each returned card carries a ``metadata['rec']`` breakdown — the affinity, the
+    Each returned card carries a ``metadata['rec']`` breakdown — the raw affinity, the
     popularity prior and the final score — so the feed can be explained and debugged
     rather than being an opaque ordering. With no signals this degrades to a diversified
     popularity feed, which is the correct cold-start behaviour.
     """
     weights = idf_weights(piece_tags)
     profile = build_profile(signals, piece_tags, weights)
-    excluded = set(exclude_piece_ids)
+    excluded_pieces = set(exclude_piece_ids)
+    excluded_cards = set(exclude_card_ids)
 
-    scored: list[tuple[float, float, float, dict[str, Any]]] = []
+    candidates: list[tuple[dict[str, Any], float, float]] = []
     for card in cards:
         piece_id = card.get("piece_id") or (card.get("piece") or {}).get("id")
-        if piece_id in excluded:
+        if piece_id in excluded_pieces or card.get("id") in excluded_cards:
             continue
-        aff = affinity(piece_tags.get(piece_id, ()), profile, weights)
-        pop = _popularity(card)
-        base = (1 - POPULARITY_WEIGHT) * aff + POPULARITY_WEIGHT * pop
-        scored.append((base, aff, pop, card))
+        candidates.append((
+            card,
+            affinity(piece_tags.get(piece_id, ()), profile, weights),
+            _popularity(card),
+        ))
 
+    # Rescale within the pool before blending, so POPULARITY_WEIGHT is a real proportion.
+    affs = _rescale([a for _c, a, _p in candidates])
+    pops = _rescale([p for _c, _a, p in candidates])
+
+    scored = [
+        ((1 - POPULARITY_WEIGHT) * affs[i] + POPULARITY_WEIGHT * pops[i], a, p, card)
+        for i, (card, a, p) in enumerate(candidates)
+    ]
     scored.sort(key=lambda row: -row[0])
     return _diversify(scored, piece_tags, limit)
+
+
+def _group_of(piece_id: str, piece_tags: dict[str, list[tuple[str, str]]]) -> str | None:
+    """What a piece belongs to for diversity purposes: its composer, or for an artist
+    entry (which has no composer) the creator whose channel it is."""
+    tags = piece_tags.get(piece_id, ())
+    return next(
+        (v for k, v in tags if k == "composer"),
+        next((v for k, v in tags if k == "creator"), None),
+    )
 
 
 def _diversify(
@@ -173,35 +225,44 @@ def _diversify(
     piece_tags: dict[str, list[tuple[str, str]]],
     limit: int,
 ) -> list[dict[str, Any]]:
-    """Greedily pick the best remaining card, penalising pieces and composers already
-    picked. A simple MMR: it costs a little relevance per slot and buys a board that
-    looks like a feed instead of a search result."""
+    """Greedily pick the best remaining card, fading pieces and composers already picked.
+    A simple MMR: it costs a little relevance per slot and buys a board that looks like a
+    feed instead of a search result."""
     remaining = list(scored)
     seen_pieces: Counter[str] = Counter()
-    seen_composers: Counter[str] = Counter()
+    seen_groups: Counter[str] = Counter()
     out: list[dict[str, Any]] = []
 
+    run_piece: str | None = None   # piece occupying the current consecutive run
+    run_length = 0
+
     while remaining and len(out) < limit:
-        best_i, best_val, best_row = 0, -math.inf, remaining[0]
+        blocked = run_piece if run_length >= MAX_CONSECUTIVE_PER_PIECE else None
+        best_i, best_val, best_row = -1, -math.inf, None
         for i, row in enumerate(remaining):
             base, _aff, _pop, card = row
             piece_id = card.get("piece_id") or (card.get("piece") or {}).get("id")
-            composer = next(
-                (v for k, v in piece_tags.get(piece_id, ()) if k == "composer"), None
-            )
-            value = base
-            value -= PIECE_PENALTY * seen_pieces[piece_id]
-            if composer:
-                value -= COMPOSER_PENALTY * seen_composers[composer]
+            if piece_id == blocked:
+                continue
+            value = base * (PIECE_DECAY ** seen_pieces[piece_id])
+            group = _group_of(piece_id, piece_tags)
+            if group:
+                value *= GROUP_DECAY ** seen_groups[group]
             if value > best_val:
                 best_i, best_val, best_row = i, value, row
 
+        if best_row is None:      # only the blocked piece is left — let it continue
+            best_i, best_row = 0, remaining[0]
+            best_val = best_row[0]
+
         base, aff, pop, card = best_row
         piece_id = card.get("piece_id") or (card.get("piece") or {}).get("id")
-        composer = next((v for k, v in piece_tags.get(piece_id, ()) if k == "composer"), None)
+        group = _group_of(piece_id, piece_tags)
         seen_pieces[piece_id] += 1
-        if composer:
-            seen_composers[composer] += 1
+        if group:
+            seen_groups[group] += 1
+        run_length = run_length + 1 if piece_id == run_piece else 1
+        run_piece = piece_id
         card = {
             **card,
             "metadata": {

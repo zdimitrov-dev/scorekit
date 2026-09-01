@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { Search, Loader2, Clock } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
@@ -126,17 +126,23 @@ export default function SearchFeed() {
     }
   }
 
-  const videos = sortVideos(
-    results.filter((c) => c.source === "youtube"),
-    sort,
+  // Memoized so opening a card — which re-renders this component — doesn't hand Feed and
+  // ScoresDrawer brand-new arrays and make them rebuild their layout from scratch.
+  const videos = useMemo(
+    () => sortVideos(results.filter((c) => c.source === "youtube"), sort),
+    [results, sort],
   );
-  const scores = results
-    .filter((c) => c.source === "imslp" || c.source === "musescore")
-    .sort((a, b) => {
-      const ms = (b.metadata?.match_score ?? 0) - (a.metadata?.match_score ?? 0);
-      if (ms !== 0) return ms;
-      return (b.thumbnail_url ? 1 : 0) - (a.thumbnail_url ? 1 : 0);
-    });
+  const scores = useMemo(
+    () =>
+      results
+        .filter((c) => c.source === "imslp" || c.source === "musescore")
+        .sort((a, b) => {
+          const ms = (b.metadata?.match_score ?? 0) - (a.metadata?.match_score ?? 0);
+          if (ms !== 0) return ms;
+          return (b.thumbnail_url ? 1 : 0) - (a.thumbnail_url ? 1 : 0);
+        }),
+    [results],
+  );
 
   return (
     <div>
@@ -156,9 +162,11 @@ export default function SearchFeed() {
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onFocus={() => setRecentOpen(true)}
-            // onFocus alone misses the common case: after a search the input still
-            // holds focus, so clicking back into it fires no focus event.
+            // Click, not focus. The input autofocuses on mount, so opening on focus put
+            // the panel over the top row of results on every visit to /search and
+            // swallowed clicks meant for those cards. Click also covers the case focus
+            // would miss: after a search the input still holds focus, so clicking back
+            // into it fires no focus event at all.
             onClick={() => setRecentOpen(true)}
             onKeyDown={(e) => e.key === "Escape" && setRecentOpen(false)}
             placeholder="Search a piece — e.g. “Für Elise” or “Chopin Nocturne”"

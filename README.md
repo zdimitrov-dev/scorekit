@@ -89,6 +89,8 @@ python -m scorekit.jobs.train_model                      # train and evaluate th
 python -m scorekit.jobs.train_model --promote            # serve it if it clears the gate
 python -m scorekit.jobs.train_model --force              # save a failing fit for testing
 python -m scorekit.jobs.compare                          # heuristic vs model, side by side
+python -m scorekit.jobs.simulate                         # synthetic users with a known taste
+python -m scorekit.jobs.recover                          # did the model recover that taste?
 python -m scorekit.jobs.migrate                          # apply db/migrations
 pytest                                                    # run the test suite
 ```

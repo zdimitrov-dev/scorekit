@@ -321,3 +321,31 @@ def test_a_model_trained_on_position_is_refused(monkeypatch):
     loaded = LoadedModel(_Const(), feature_names(with_position=True), {"passed_gate": True})
     monkeypatch.setattr(serve, "load_model", lambda: loaded)
     assert serve.score_cards([_card("chopin-1")], PIECE_TAGS, W, [("chopin-1", 1.0)]) is None
+
+
+# --- ground-truth recovery --------------------------------------------------
+
+def test_recovery_scales_between_chance_and_the_best_possible():
+    """Personas differ in how much of the corpus they like at all, so a raw mean is not
+    comparable across them. Scaling makes 0 mean "no better than a random ordering" and
+    1 mean "the optimal ordering" for every persona alike."""
+    from scorekit.jobs.recover import _recovered
+    # Picked the best available.
+    assert _recovered([3.0, 3.0], ideal=3.0, corpus_mean=1.0) == 1.0
+    # Picked no better than the corpus average.
+    assert _recovered([1.0, 1.0], ideal=3.0, corpus_mean=1.0) == 0.0
+    # Halfway.
+    assert _recovered([2.0, 2.0], ideal=3.0, corpus_mean=1.0) == 0.5
+    # Worse than chance is reported as zero, not negative.
+    assert _recovered([0.0], ideal=3.0, corpus_mean=1.0) == 0.0
+    # A persona that likes everything equally has nothing to recover.
+    assert _recovered([1.0], ideal=1.0, corpus_mean=1.0) == 0.0
+
+
+def test_the_any_tag_hit_rate_is_kept_only_as_a_floor():
+    """It saturates: a persona wanting "romantic" matches most of the corpus, so every
+    ranker scores 100% and the metric cannot tell two rankers apart."""
+    from scorekit.jobs.recover import _hit
+    persona = {("composer", "chopin"): 2.0, ("era", "romantic"): 0.5}
+    assert _hit([("era", "romantic")], persona)
+    assert not _hit([("era", "baroque")], persona)

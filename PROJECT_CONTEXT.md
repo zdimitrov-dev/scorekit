@@ -412,6 +412,25 @@ reason is visible in the importances: the forest's top features are `affinity_ov
 already uses. What the model adds is learning the relative weight of each axis instead of
 being handed `KEY_WEIGHTS`, and that is worth about two points of AUC, not ten.
 
+**Did it recover the taste we wrote down?** (`jobs/recover.py`) Every other number here is
+computed against behaviour, which is what the model was fitted on, so a high score can come
+from learning the taste or from learning an artefact of collection and look identical either
+way — the fabricated-timestamp model scored 0.914, better than anything honest has. Personas
+are the one case where that ambiguity is escapable: their preferences exist as numbers the
+model never sees. Ranking the whole corpus for each and scoring the top ten against those
+numbers, scaled so 0% is a random ordering and 100% is the best any ranking could achieve:
+
+| | mean over 12 personas |
+|---|---|
+| learned model | **81%** |
+| heuristic | 79% |
+
+Consistent with the AUC gap, and per-persona it is not uniform: the model takes
+nordic-romantic 100% to 42% and loses bach-completist 62% to 100%. A simpler "does the top
+ten contain any tag this persona wants" measure is also reported and is useless — every
+ranker scores 100%, because a persona wanting "romantic" matches 274 of 582 pieces. It is
+kept only to show why the scaled measure is the one to read.
+
 **`feed_position` was tried and is off by default** (`--with-position`). Two findings, and
 the second matters more than the first.
 

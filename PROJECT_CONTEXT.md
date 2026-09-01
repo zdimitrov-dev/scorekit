@@ -4,7 +4,7 @@
 > current state, and roadmap in one place. Keep it in sync with the code as the
 > project evolves (see [Keeping this file current](#keeping-this-file-current)).
 
-**Last updated:** 2026-08-31 · **Phase:** all three connectors live (YouTube, IMSLP, MuseScore/Tavily); **Phase 4 feed UI (`web/`) with live streaming search — in progress** ·
+**Last updated:** 2026-09-01 · **Phase:** all three connectors live; corpus seeded to 580 pieces; content-based recommender live; **learned ranker (§6b) next, blocked on interaction data** ·
 **Repo:** https://github.com/zdimitrov-dev/scorekit
 
 ---
@@ -21,15 +21,16 @@
 | Attribution + enrichment | ✅ Match-scoring filter (`scorekit/matching.py`) + IMSLP enrichment (license, instrumentation, style, year) |
 | Persistence (ingest → Supabase) | ✅ Built & verified live (`scorekit/store.py`) |
 | Feed UI (Phase 4) | 🟡 In progress — Next.js app in `web/` (masonry board, bottom nav, click-to-expand modal, like/save); reads Supabase server-side |
+| Corpus | ✅ **580 pieces / 43 composers**, seeded from IMSLP (`scorekit.jobs.seed`); grows further on each search |
 | Piece tagging (`piece_tags`) | ✅ Derived from cards by `scorekit/tagging.py` (job: `scorekit.jobs.tag_pieces`) |
+| Piano-only ingestion | ✅ YouTube filtered by `scorekit/piano.py`; IMSLP by instrument category |
 | Recommender — content-based | ✅ Live — ranks the home feed (`scorekit/recommend.py`, `POST /recommend`); signals still from localStorage |
 | Swipe logging / collaborative filtering | ⛔ Not started (Phase 5, then the collaborative half of Phase 6) |
 
-**The immediate next action:** **Phase 5 — real interaction logging** (auth + writes to
-`interactions`), which is what the collaborative half of the recommender needs. The
-**content-based recommender is live** (see §6a): Home is ranked by tag affinity, but its
-signals still come from the browser's localStorage, so there is no cross-device or
-cross-user history to learn from yet.
+**The immediate next action:** **generate interaction data by using the feed**, then build
+the learned ranker (§6b). Logging is live (§5a) and the corpus is now 580 pieces (§4a), so
+the model finally has both labels to learn from and enough distinct items to generalise
+over — at 18 pieces a classifier could only memorise 18 feature vectors.
 
 Open refinements elsewhere: YouTube `kind` via an LLM (see Open questions), the
 same-name/different-composition attribution residual, per-movement labeling (a resolved
@@ -109,6 +110,7 @@ scorekit/
 │   ├── matching.py         # attribution match-scoring; drop clear non-matches. TESTED.
 │   ├── tagging.py          # derive piece_tags (composer/era/style/instrumentation/form). TESTED.
 │   ├── recommend.py        # content-based ranker: profile → affinity → popularity → diversity. TESTED.
+│   ├── piano.py            # keep YouTube results piano-only (§4b). TESTED.
 │   ├── api.py              # FastAPI: /search, /search/stream (NDJSON), /recommend
 │   ├── connectors/
 │   │   ├── __init__.py     # Connector registry (CONNECTORS list, phase-ordered)
@@ -119,7 +121,9 @@ scorekit/
 │   └── jobs/
 │       ├── __init__.py
 │       ├── ingest.py       # CLI orchestrator: search → match-filter → enrich → persist
-│       └── tag_pieces.py   # rebuild piece_tags from stored cards (idempotent)
+│       ├── tag_pieces.py   # rebuild piece_tags from stored cards (idempotent)
+│       ├── seed.py         # seed the corpus from IMSLP's catalogue (§4a)
+│       └── migrate.py      # apply db/migrations/*.sql (idempotent)
 ├── tests/
 │   ├── test_normalize.py   # slug normalizer
 │   ├── test_store.py       # persistence upserts (fake client)
@@ -128,6 +132,8 @@ scorekit/
 │   ├── test_imslp.py       # IMSLP parsing, enrichment, connector
 │   ├── test_musescore.py   # MuseScore Tavily mapping, cache, gate
 │   ├── test_api_stream.py  # per-source search cache (negative-cache regression)
+│   ├── test_piano.py       # piano-only filtering, recall cases from live results
+│   ├── test_seed.py        # catalogue walk, piano categories, priority ordering
 │   ├── test_tagging.py     # tag derivation + the corroboration rules
 │   └── test_recommend.py   # profile, IDF, affinity, cold start, diversity
 └── web/                    # Phase 4 — Next.js feed app (App Router, Tailwind, framer-motion)
@@ -231,6 +237,66 @@ score, listing)` · `interaction_action(like, skip, click)`
 ### Indexes
 `idx_cards_piece(piece_id)` · `idx_interactions_user(user_id, created_at desc)` ·
 `idx_interactions_piece(piece_id)` · `idx_piece_tags_kv(key, value)`
+
+---
+
+## 4a. Corpus seeding — **built** (`scorekit/jobs/seed.py`)
+
+Ingestion is otherwise **reactive**: nothing enters the database until someone searches for
+it, so the corpus mirrors previous searches. That caps the recommender twice — it can never
+surprise anyone with a piece nobody looked up, and on a tiny corpus the IDF statistics it
+weights tags by are computed from noise. Neither is fixed by more *interactions*; both need
+more *items*. Seeding took the corpus from **18 pieces to 580** (43 composers, 95 distinct
+tag values, 0 untagged).
+
+IMSLP is the right source: no API quota (unlike YouTube's ~100 searches/day), page titles
+carry the composer explicitly, and work pages carry the style and instrumentation that make
+a piece rankable on arrival. Only IMSLP cards are created — video and MuseScore hydration
+stays lazy, so seeding thousands of pieces never touches the quota-limited sources.
+
+**Which categories count as piano was measured, and the obvious answer is wrong in both
+directions** (`connectors/imslp.PIANO_CATEGORIES`):
+- `For piano` alone collapses the baroque, because IMSLP files music by the instrument it
+  was written for — Bach has **1** work in it, Scarlatti **0**, Handel **2**. Adding
+  `For keyboard` and `For harpsichord` fixes it (Bach → 277, Scarlatti → 558) at no cost.
+- Adding `For piano (arr)` would nearly double Mozart (111 → 326) and Beethoven (93 → 179)
+  with piano reductions of symphonies, and admits works like Chopin's *Cello Sonata*.
+
+Seeding is **composer-scoped and priority-ordered**: `Category:For piano` holds 54,000+
+pages alphabetically, so a category walk yields obscurity, and a small `--per-composer`
+would seed the obscure end of every composer ("2 Mazurkas, B.16" before the Ballades).
+Naming a musical form and carrying an opus number both track how well known a work is.
+
+Verified on the seeded corpus: `public_domain=true` now weighs **0.072** against
+`composer=chopin` at **3.226**, and liking Chopin's Ballade No.1 returns Ballades 2–4 at
+affinity 1.00 and then generalises to the Ballades of Liszt, Grieg, Brahms and Fauré.
+
+---
+
+## 4b. Keeping YouTube piano-only — **built** (`scorekit/piano.py`)
+
+YouTube search is not a piano index. "Rousseau" returns political-philosophy lectures
+beside that pianist's covers; anything let through lands in the corpus permanently and then
+feeds the recommender. IMSLP is filtered at the catalogue level (§4a) and MuseScore returns
+sheet music by construction, so **only YouTube needs this**.
+
+Keyword matching fails in both directions, and two real results prove it:
+- "Chopin - Nocturne op.9 No.2" never says *piano* — not in the title, not in the
+  description. A keyword filter drops unmistakable repertoire.
+- Kassia's "Beethoven - Symphony No. 5" is a **Liszt piano transcription**, while the
+  identically-titled DW Classical upload is an orchestra.
+
+So the rules are layered: piano evidence is read from **everywhere** (description included,
+where sheet-music and flowkey/Synthesia links live) and checked **first**, so a
+transcription survives its own title. Rejection reads the **title and channel only** — a
+pianist's bio naming the orchestras he plays with was dropping his solo Grieg. Results
+silent either way fall back to whether the *piece* is piano repertoire. Finally, a channel
+the result set has already shown to be a piano channel (≥2 uploads) vouches for its others,
+because a piano channel does not restate the instrument every time.
+
+Measured live: **10 of 12 piano queries keep 100%** of results; the only drops on the other
+two are a saxophone quartet and a Coldplay live set — both correct. Taylor Swift, gaming
+laptops, tyre changes and a violin concerto all go to **zero**.
 
 ---
 

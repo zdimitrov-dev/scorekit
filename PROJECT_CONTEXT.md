@@ -427,11 +427,14 @@ not exist, because the scores are what decide it. `ml/serve` therefore refuses a
 whose feature list contains it, rather than quietly feeding NaN into a column the model was
 told to trust and looking like a model that never helps.
 
-Doing this properly means treating position as a training-time correction rather than a
-feature: weight each row by the inverse probability that a card at that rank was examined
-at all, so a like from the bottom of the feed counts for more than one from the top. That
-needs the simulator to model examination as a function of rank first, otherwise there is
-still nothing to correct.
+The usual correction is inverse propensity weighting: weight each row by the inverse
+probability that a card at that rank was examined at all, so a like from the bottom of the
+feed counts for more than one from the top. **Deliberately not done, and not a TODO.** It
+could only be validated against a simulator, and a simulator has no attention to draw down
+a page. Any decay curve would be one we invented, so measuring the correction against it
+would only confirm we can undo our own assumption. Position bias is real in real traffic
+and is the right thing to reach for once there is some; it is not a thing synthetic data
+can answer.
 
 **Promotion gate (`ml/registry.py`).** A fit is not automatically worth serving. On a small
 or skewed log it can rank worse than the heuristic and worse than chance, and promoting it
@@ -592,8 +595,9 @@ worker can survive its parent and keep serving stale code on the port.
   `interactions.user_id` is a bare uuid. Both need wiring to Supabase auth.
 - **RLS policies.** All four tables have RLS enabled with no policies, so only the service
   key can read. Correct today, real work once the browser reads its own rows.
-- **Serving the learned ranker.** Persistence, a quality gate, and a retrain trigger.
-- **Impression weighting.** Grade the negative by time on screen (section 9).
+- **Position bias.** Real in real traffic, unanswerable with synthetic users (see 8c).
+  Revisit when the log has traffic from more than one person.
+
 - **Cold-start popularity.** The conflation described in 8a.
 - **YouTube `kind` via an LLM.** The title heuristic classifies many cards as `None`.
   Batch 50 to 100 cards per call, keyed by card id so responses cannot drift out of order.

@@ -169,13 +169,18 @@ def rank_cards(
     limit: int = 60,
     exclude_piece_ids: Iterable[str] = (),
     exclude_card_ids: Iterable[str] = (),
+    relevance: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Rank ``cards`` for a user, most relevant first.
 
-    Each returned card carries a ``metadata['rec']`` breakdown — the raw affinity, the
-    popularity prior and the final score — so the feed can be explained and debugged
-    rather than being an opaque ordering. With no signals this degrades to a diversified
-    popularity feed, which is the correct cold-start behaviour.
+    Each returned card carries a ``metadata['rec']`` breakdown (the relevance, the
+    popularity prior and the final score) so the feed can be explained rather than being an
+    opaque ordering. With no signals this degrades to a diversified popularity feed, which
+    is the correct cold-start behaviour.
+
+    ``relevance`` optionally replaces tag affinity with a learned per-card score. Only that
+    one input changes: the popularity blend, the diversity pass and the already-engaged
+    rules stay identical, so swapping rankers cannot alter anything else about the feed.
     """
     weights = idf_weights(piece_tags)
     profile = build_profile(signals, piece_tags, weights)
@@ -187,11 +192,9 @@ def rank_cards(
         piece_id = card.get("piece_id") or (card.get("piece") or {}).get("id")
         if piece_id in excluded_pieces or card.get("id") in excluded_cards:
             continue
-        candidates.append((
-            card,
-            affinity(piece_tags.get(piece_id, ()), profile, weights),
-            _popularity(card),
-        ))
+        score = (relevance.get(card.get("id"), 0.0) if relevance is not None
+                 else affinity(piece_tags.get(piece_id, ()), profile, weights))
+        candidates.append((card, score, _popularity(card)))
 
     # Rescale within the pool before blending, so POPULARITY_WEIGHT is a real proportion.
     affs = _rescale([a for _c, a, _p in candidates])

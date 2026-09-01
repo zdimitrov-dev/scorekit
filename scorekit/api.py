@@ -29,7 +29,9 @@ from .matching import MATCHER_VERSION, annotate_and_filter
 from .models import Piece
 from .normalize import normalize_slug
 from .piano import filter_piano
-from .recommend import idf_weights, rank_cards
+from .ml.registry import model_info
+from .ml.serve import score_cards
+from .recommend import SIGNAL_WEIGHTS, idf_weights, rank_cards
 from .similar import similar_cards
 from .store import log_events, retag_piece, upsert_cards, upsert_piece
 
@@ -276,9 +278,18 @@ def recommend(req: RecommendRequest) -> dict:
         signals.append((piece_id, s.action))
         seen_cards.add(s.card_id)
 
+    # The learned ranker supplies relevance when one has been promoted and the viewer has
+    # a history for it to read; otherwise this is None and the content ranker is used. See
+    # ml/registry for the gate a fit must pass before it is served.
+    weights = idf_weights(tags)
+    positives = [(piece_id, SIGNAL_WEIGHTS.get(action, 0.0))
+                 for piece_id, action in signals if SIGNAL_WEIGHTS.get(action, 0.0) > 0]
+    relevance = score_cards(cards, tags, weights, positives)
+
     ranked = rank_cards(
         cards, tags, signals=signals, limit=req.limit,
         exclude_card_ids=seen_cards if req.exclude_seen else (),
+        relevance=relevance,
     )
     return {
         "cards": ranked,
@@ -286,6 +297,7 @@ def recommend(req: RecommendRequest) -> dict:
         "tagged_pieces": len(tags),
         # surfaced so a feed that silently stopped personalising is diagnosable
         "unknown_signals": unknown,
+        "ranker": "model" if relevance is not None else "content",
     }
 
 

@@ -133,3 +133,48 @@ def test_cross_user_split_holds_out_whole_users():
     train_users = {data.groups[i] for i in train}
     test_users = {data.groups[i] for i in test}
     assert not (train_users & test_users)      # no user appears on both sides
+
+
+# --- the promotion gate -----------------------------------------------------
+
+def test_gate_refuses_a_model_that_cannot_beat_the_heuristic():
+    from scorekit.ml.registry import gate
+    ok, reason = gate(auc=0.60, heuristic_auc=0.59, positives=200)
+    assert not ok and "does not beat the heuristic" in reason
+
+
+def test_gate_refuses_a_model_no_better_than_chance():
+    from scorekit.ml.registry import gate
+    ok, reason = gate(auc=0.41, heuristic_auc=0.40, positives=200)
+    assert not ok and "chance" in reason
+
+
+def test_gate_refuses_until_there_are_enough_positives():
+    """A handful of likes in the held-out split makes AUC swing on one row landing
+    differently, so a high score there is not evidence of anything."""
+    from scorekit.ml.registry import gate, MIN_POSITIVES
+    ok, reason = gate(auc=0.99, heuristic_auc=0.50, positives=MIN_POSITIVES - 1)
+    assert not ok and "positive examples" in reason
+
+
+def test_gate_accepts_a_clear_win_on_enough_data():
+    from scorekit.ml.registry import gate
+    ok, _ = gate(auc=0.78, heuristic_auc=0.70, positives=200)
+    assert ok
+
+
+def test_serving_falls_back_when_no_model_is_promoted():
+    from scorekit.ml.serve import score_cards
+    assert score_cards([_card("chopin-1")], PIECE_TAGS, W, [("chopin-1", 1.0)]) is None
+
+
+def test_ranker_uses_a_learned_relevance_when_given_one():
+    """The model replaces one input, not the ranker: popularity, diversity and the
+    already-engaged rules stay identical, so falling back changes nothing else."""
+    from scorekit.recommend import rank_cards
+    cards = [
+        {"id": "a", "piece_id": "chopin-1", "title": "a", "metadata": {"view_count": 10}},
+        {"id": "b", "piece_id": "bach-1", "title": "b", "metadata": {"view_count": 9_000_000}},
+    ]
+    ranked = rank_cards(cards, PIECE_TAGS, signals=[], relevance={"a": 0.99, "b": 0.01})
+    assert [c["id"] for c in ranked][0] == "a"

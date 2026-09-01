@@ -12,6 +12,7 @@ from typing import Any
 from ..db import get_client
 from ..ml.dataset import build_dataset, label_summary
 from ..ml.features import corpus_weights
+from ..ml.registry import gate, save_model
 from ..ml.train import heuristic_baseline, train_all
 
 log = logging.getLogger("scorekit.train")
@@ -36,6 +37,8 @@ def main() -> None:
     parser.add_argument("--top-features", type=int, default=10)
     parser.add_argument("--mode", choices=["chronological", "cross_user", "both"],
                         default="both", help="how to hold out the test rows")
+    parser.add_argument("--promote", action="store_true",
+                        help="save the best fit for the feed to use, if it passes the gate")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 

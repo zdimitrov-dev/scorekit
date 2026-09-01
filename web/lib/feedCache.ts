@@ -79,6 +79,31 @@ function writeStore(entry: Cached) {
 }
 
 /** The cached feed if it still matches the current signals and hasn't gone stale. */
+const RANKER_KEY = "scorekit:ranker";
+
+/** Which ranker to ask for, as chosen on the dev dashboard.
+ *
+ *  Stored rather than held in component state so the dashboard and the home feed agree:
+ *  they are separate pages, and a choice made on one has to survive navigating to the
+ *  other. "auto" is the real product behaviour and leaves no key behind. */
+export function getRankerOverride(): Ranker {
+  try {
+    const v = localStorage.getItem(RANKER_KEY);
+    return v === "model" || v === "content" ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+export function setRankerOverride(ranker: Ranker): void {
+  try {
+    if (ranker === "auto") localStorage.removeItem(RANKER_KEY);
+    else localStorage.setItem(RANKER_KEY, ranker);
+  } catch {
+    /* private mode: the choice simply does not persist */
+  }
+}
+
 export function getFresh(ranker: Ranker = "auto"): Cached | null {
   const entry = readStore();
   if (!entry) return null;
@@ -94,7 +119,7 @@ export function getFresh(ranker: Ranker = "auto"): Cached | null {
 export function clearBrowserSignals(): void {
   memory = null;
   const keys = [KEY, "scorekit:likes", "scorekit:saves",
-               "scorekit:likes:at", "scorekit:saves:at"];
+               "scorekit:likes:at", "scorekit:saves:at", RANKER_KEY];
   for (const key of keys) {
     try {
       localStorage.removeItem(key);
@@ -149,6 +174,7 @@ export function refreshFeed(ranker: Ranker = "auto"): Promise<Cached | null> {
 /** Rebuild in the background — called after a like or save, so the next visit to Home is
  *  already correct. Fire and forget: nothing waits on it. */
 export function warmFeed() {
-  if (getFresh()) return;
-  void refreshFeed();
+  const ranker = getRankerOverride();
+  if (getFresh(ranker)) return;
+  void refreshFeed(ranker);
 }

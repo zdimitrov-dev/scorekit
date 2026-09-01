@@ -1,7 +1,10 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, FlaskConical, Database, Activity, Cpu, Eraser, Play } from "lucide-react";
-import { clearBrowserSignals, getFresh } from "@/lib/feedCache";
+import {
+  clearBrowserSignals, getFresh, getRankerOverride, setRankerOverride,
+  type Ranker,
+} from "@/lib/feedCache";
 import { viewerId } from "@/lib/track";
 
 /**
@@ -110,6 +113,9 @@ export default function DevDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [local, setLocal] = useState({ likes: 0, saves: 0, cached: false, cachedBy: "" });
+  // What the feed will ask for, shared with HomeFeed through localStorage.
+  const [override, setOverride] = useState<Ranker>("auto");
+  useEffect(() => setOverride(getRankerOverride()), []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -238,7 +244,14 @@ export default function DevDashboard() {
   );
 
   const m = stats?.model;
-  const served = stats?.active_ranker === "model";
+  // What this browser will actually be served, which is the promotion state only while
+  // the override is "auto".
+  const served =
+    override === "model"
+      ? Boolean(m?.available)
+      : override === "content"
+        ? false
+        : stats?.active_ranker === "model";
 
   return (
     <div className="space-y-4">
@@ -275,8 +288,36 @@ export default function DevDashboard() {
                   : "bg-[var(--surface-2)]"
               }`}
             >
-              {served ? "Trained model" : "Content ranker (hand-tuned)"}
+              {served
+                ? `Trained model${m?.promoted ? "" : " (forced, has not passed its gate)"}`
+                : "Content ranker (hand-tuned)"}
             </div>
+            {/* Three explicit choices rather than a toggle. Once a model is promoted,
+                "auto" serves it too, so a two-way flip between "model" and "auto" has no
+                visible effect and looks broken. */}
+            <div className="mb-3 grid grid-cols-3 gap-1.5">
+              {(["auto", "model", "content"] as Ranker[]).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => {
+                    setRankerOverride(r);
+                    setOverride(r);
+                  }}
+                  className={`rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${
+                    override === r
+                      ? "bg-[var(--accent)] text-white"
+                      : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground)]"
+                  }`}
+                >
+                  {r === "auto" ? "Auto" : r === "model" ? "Force model" : "Force content"}
+                </button>
+              ))}
+            </div>
+            <Row
+              label="Feed is asking for"
+              value={override}
+              tone={override === "auto" ? undefined : "text-amber-400"}
+            />
             <Row label="Model on disk" value={m?.available ? "yes" : "none"} />
             <Row
               label="Passed its gate"

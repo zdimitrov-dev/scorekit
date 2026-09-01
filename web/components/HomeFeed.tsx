@@ -2,7 +2,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw, Sparkles, FlaskConical } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
-import { currentSignals, getFresh, refreshFeed, type Ranker } from "@/lib/feedCache";
+import {
+  currentSignals, getFresh, getRankerOverride, refreshFeed, setRankerOverride,
+  type Ranker,
+} from "@/lib/feedCache";
 import Feed from "./Feed";
 
 /**
@@ -22,8 +25,11 @@ export default function HomeFeed() {
   const [failed, setFailed] = useState(false);
   const [signalCount, setSignalCount] = useState(0);
   // Which ranker to ask for. "auto" is the real behaviour: the learned model only once it
-  // has passed its gate. "model" forces a saved-but-unpromoted model so it can be tried.
+  // has passed its gate. "model" and "content" force one either way, which is the only
+  // thing that works as a toggle — once a model is promoted, "auto" serves it too, so
+  // flipping between "model" and "auto" changes nothing.
   const [ranker, setRanker] = useState<Ranker>("auto");
+  useEffect(() => setRanker(getRankerOverride()), []);
   const [servedBy, setServedBy] = useState<string>("content");
   const [modelAvailable, setModelAvailable] = useState(false);
 
@@ -80,8 +86,12 @@ export default function HomeFeed() {
         <span className="flex shrink-0 items-center gap-2">
         {modelAvailable && (
           <button
-            onClick={() => setRanker(ranker === "model" ? "auto" : "model")}
-            title="Rank with the trained model instead of the hand-tuned scoring"
+            onClick={() => {
+              const next: Ranker = servedBy === "model" ? "content" : "model";
+              setRankerOverride(next);
+              setRanker(next);
+            }}
+            title="Switch between the trained model and the hand-tuned scoring"
             className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 font-medium transition-colors ${
               servedBy === "model"
                 ? "bg-[var(--accent)] text-white"
@@ -89,7 +99,7 @@ export default function HomeFeed() {
             }`}
           >
             <FlaskConical size={13} />
-            {servedBy === "model" ? "Trained model" : "Try trained model"}
+            {servedBy === "model" ? "Trained model" : "Content ranker"}
           </button>
         )}
         <button

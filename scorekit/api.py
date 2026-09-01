@@ -29,7 +29,7 @@ from .matching import MATCHER_VERSION, annotate_and_filter
 from .models import Piece
 from .normalize import normalize_slug
 from .piano import filter_piano
-from .ml.registry import model_info
+from .ml.registry import MIN_AUC_GAIN, MIN_POSITIVES, model_info
 from .ml.serve import score_cards
 from .recommend import SIGNAL_WEIGHTS, idf_weights, rank_cards
 from .similar import similar_cards
@@ -173,6 +173,9 @@ class RecommendRequest(BaseModel):
     # reads as the recommender ignoring the like. Liking a piece should surface *more* of
     # it, and the diversity pass stops that becoming a wall of one piece.
     exclude_seen: bool = True
+    # "auto" uses the learned model only once it has passed the gate; "model" forces it
+    # even when it has not, for side-by-side testing; "content" pins the heuristic.
+    ranker: str = "auto"
 
 
 class InteractionEvent(BaseModel):
@@ -284,7 +287,10 @@ def recommend(req: RecommendRequest) -> dict:
     weights = idf_weights(tags)
     positives = [(piece_id, SIGNAL_WEIGHTS.get(action, 0.0))
                  for piece_id, action in signals if SIGNAL_WEIGHTS.get(action, 0.0) > 0]
-    relevance = score_cards(cards, tags, weights, positives)
+    relevance = None
+    if req.ranker != "content":
+        relevance = score_cards(cards, tags, weights, positives,
+                                force=req.ranker == "model")
 
     ranked = rank_cards(
         cards, tags, signals=signals, limit=req.limit,
@@ -298,6 +304,54 @@ def recommend(req: RecommendRequest) -> dict:
         # surfaced so a feed that silently stopped personalising is diagnosable
         "unknown_signals": unknown,
         "ranker": "model" if relevance is not None else "content",
+        "model": model_info(),
+    }
+
+
+@app.get("/dev/stats")
+def dev_stats() -> dict:
+    """Everything the dev dashboard shows: which ranker is live, what the model scored,
+    and the shape of the corpus and the interaction log.
+
+    A development surface, not part of the product. Remove it before release."""
+    sb = get_client()
+
+    def count(table: str) -> int:
+        return sb.table(table).select("id", count="exact").limit(1).execute().count or 0
+
+    actions: dict[str, int] = {}
+    seen = 0
+    while True:
+        rows = (sb.table("interactions").select("action")
+                .range(seen, seen + 999).execute().data or [])
+        for r in rows:
+            actions[r["action"]] = actions.get(r["action"], 0) + 1
+        seen += len(rows)
+        if len(rows) < 1000:
+            break
+
+    tags = _piece_tags(sb)
+    sources: dict[str, int] = {}
+    for c in _all_cards(sb):
+        sources[c["source"]] = sources.get(c["source"], 0) + 1
+
+    info = model_info()
+    return {
+        "model": info,
+        "active_ranker": "model" if info.get("promoted") else "content",
+        "corpus": {
+            "pieces": count("pieces"),
+            "cards": sum(sources.values()),
+            "cards_by_source": sources,
+            "tagged_pieces": len(tags),
+            "distinct_tags": len({t for v in tags.values() for t in v}),
+        },
+        "interactions": {
+            "total": sum(actions.values()),
+            "by_action": actions,
+            "positives": actions.get("like", 0) + actions.get("save", 0),
+        },
+        "gate": {"min_positives": MIN_POSITIVES, "min_auc_gain": MIN_AUC_GAIN},
     }
 
 

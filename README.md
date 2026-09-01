@@ -24,8 +24,9 @@ Piano learners face a two-part gap that no single tool covers:
 All three source connectors are live. The corpus holds roughly 580 pieces seeded from
 IMSLP's catalogue, each carrying derived tags (composer, era, form, instrumentation).
 The feed UI is built, including live search, interaction logging and a content-based
-recommender. A supervised model is trained and evaluated offline but is not yet serving
-the feed.
+recommender. A supervised model is wired into the feed behind a promotion gate: it only
+serves once it beats the hand-tuned ranker on held-out data, which it cannot yet do on the
+interaction log collected so far, so the content ranker is live.
 
 ## Architecture
 
@@ -85,6 +86,9 @@ python -m scorekit.jobs.seed --per-composer 15           # seed from IMSLP's cat
 python -m scorekit.jobs.tag_pieces                       # rebuild piece_tags
 python -m scorekit.jobs.stats                            # summarise the interaction log
 python -m scorekit.jobs.train_model                      # train and evaluate the ranker
+python -m scorekit.jobs.train_model --promote            # serve it if it clears the gate
+python -m scorekit.jobs.train_model --force              # save a failing fit for testing
+python -m scorekit.jobs.compare                          # heuristic vs model, side by side
 python -m scorekit.jobs.migrate                          # apply db/migrations
 pytest                                                    # run the test suite
 ```
@@ -107,7 +111,7 @@ pytest                                                    # run the test suite
 | 3 | MuseScore via Tavily | Done |
 | 4 | Feed UI, live search, corpus seeding | Done |
 | 5 | Interaction logging | Done |
-| 6 | Recommendation engine | Content-based live; learned ranker trained but not serving |
+| 6 | Recommendation engine | Content-based live; learned ranker gated on data volume |
 | 7 | Polish and deploy | Not started |
 
 See `PROJECT_CONTEXT.md` for design decisions and the reasoning behind them.

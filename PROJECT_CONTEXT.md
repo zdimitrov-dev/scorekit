@@ -21,12 +21,14 @@ The design, current state and reasoning in one place. Keep it in sync with the c
 | Feed UI | Next.js app in `web/`: masonry board, live search, card modal, more-like-this |
 | Interaction logging | Impressions, opens, likes, saves, with dwell |
 | Recommender (content-based) | Live. Ranks Home; signals still from localStorage |
-| Learned ranker | Trained and evaluated offline. Not serving the feed |
+| Learned ranker | Wired in behind a promotion gate. Held back: 19 of 40 positives |
+| Dev dashboard | `/dev` in the web app and `GET /dev/stats`. Remove before release |
 | Auth | Not started. Anonymous per-browser id stands in for a user |
 | Docker image build | Not verified |
 
-**Next action:** accumulate real interaction data, then wire the learned ranker into the
-feed behind a quality gate (section 8c).
+**Next action:** accumulate real interaction data until the learned ranker clears its gate
+(40 likes or saves, section 8c). Until then compare it by hand with the "Try trained
+model" toggle on Home or `python -m scorekit.jobs.compare`.
 
 ---
 
@@ -104,9 +106,11 @@ scorekit/
     similar.py           more-like-this, ranked against one card
     api.py               FastAPI service
     connectors/          youtube.py, imslp.py, musescore.py, base.py
-    ml/                  features.py, dataset.py, train.py (learned ranker)
-    jobs/                ingest, seed, tag_pieces, migrate, simulate,
-                         train_model, stats
+    ml/                  learned ranker: features.py, dataset.py, train.py,
+                         registry.py (promotion gate), serve.py (scoring)
+    jobs/                ingest, seed, tag_pieces, migrate, purge, simulate,
+                         train_model, compare, stats
+  models/                the saved ranker, gitignored
   tests/                 one module per area
   web/                   Next.js app
 ```
@@ -350,7 +354,7 @@ Laufey recording share no tag at all. Cards sharing neither are dropped rather t
 low. The strip logs no impressions: browsing one card's neighbours is exploring, not
 rejecting.
 
-### 8c. Learned ranker (trained, not serving)
+### 8c. Learned ranker (`scorekit/ml/`, wired in behind a gate)
 
 `scorekit/ml/` plus `jobs/train_model.py`. Sits beside the content ranker rather than
 replacing it, so the hand-tuned weights and the learned ones can be compared head to head
@@ -387,10 +391,33 @@ than assuming boosting wins on tabular data. Trained per persona and asked to ra
 whole corpus, it puts 10/10, 10/10 and 9/10 of each persona's own repertoire in the top
 ten.
 
-**Not wired in.** Nothing persists a fitted model, `/recommend` still runs the content
-ranker, and retraining is a manual command. Closing that needs: persist the model, serve it
-with the content ranker as cold-start fallback, promote a new fit only if it beats both the
-incumbent and the heuristic on held-out rows, and retrain on a data-volume trigger.
+**Promotion gate (`ml/registry.py`).** A fit is not automatically worth serving. On a small
+or skewed log it can rank worse than the heuristic and worse than chance, and promoting it
+would degrade the feed with nothing to indicate why. A fit only serves once it clears
+`MIN_POSITIVES = 40` likes or saves, beats chance, and beats the heuristic by
+`MIN_AUC_GAIN = 0.03` on the chronological split. Until then `/recommend` keeps the content
+ranker, which is the correct outcome rather than a failure.
+
+**Where it plugs in (`ml/serve.py`).** The model supplies the relevance term only; the
+popularity blend, diversity pass and already-engaged rules in `recommend` are untouched. So
+falling back changes exactly one input and nothing else. `score_cards` returns `None` when
+there is no model, when it is unpromoted, when the user has no history, or on any
+exception, so every failure path lands on the heuristic.
+
+**Testing a fit that has not been promoted.** `train_model --force` saves it marked
+`passed_gate: false`. It is never used on its own, but it can be asked for by name:
+
+- `POST /recommend {"ranker": "model"}` and the "Try trained model" toggle on Home serve it
+  to that one request.
+- `jobs/compare.py` prints heuristic and model side by side over the same corpus and
+  history, since one list alone cannot say whether a ranker is better.
+- `GET /dev/stats` and `/dev` in the web app report which ranker is live, the gate reason,
+  the scores, and how far the interaction log is from the threshold.
+
+**Current standing on real data:** logistic AUC 0.579, heuristic 0.407, 19 positives. The
+gate declines on the positives count alone. That heuristic figure is confounded, not an
+indictment of the feed: the negatives are impressions from the heuristic's own ranking, so
+it is being asked to separate likes from scroll-pasts among items it already judged alike.
 
 Note that personalisation already adapts without retraining: because features are crossed
 with history, a new like changes the ranking on the next page load. What is frozen is how
@@ -463,7 +490,7 @@ Reads Supabase server-side with the service key; no secret reaches the browser.
 | 3 | MuseScore via Tavily | Done |
 | 4 | Feed UI, live search, corpus seeding | Done |
 | 5 | Interaction logging | Done |
-| 6 | Recommendation engine | Content-based live; learned ranker trained, not serving |
+| 6 | Recommendation engine | Content-based live; learned ranker gated on data volume |
 | 7 | Polish and deploy | Not started |
 
 ---

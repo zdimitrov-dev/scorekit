@@ -25,14 +25,21 @@ def score_cards(
     piece_tags: dict[str, list[tuple[str, str]]],
     weights: dict[tuple[str, str], float],
     positives: list[tuple[str, float]],
+    force: bool = False,
 ) -> dict[str, float] | None:
     """``{card_id: relevance}`` from the promoted model, or None to use the heuristic.
 
     ``positives`` is the user's engaged ``(piece_id, weight)`` history, the same input the
     heuristic profile is built from, so both rankers see the same notion of taste.
+
+    ``force`` uses a model that has not passed the gate, for side-by-side testing.
     """
     loaded = load_model()
     if loaded is None:
+        return None
+    # An unpromoted model is only ever used when explicitly asked for, so testing one
+    # cannot change what anybody else sees.
+    if not loaded.promoted and not force:
         return None
     if not positives:
         # A model trained on engagement has nothing to say about someone with none. Cold

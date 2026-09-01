@@ -1,8 +1,8 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { Loader2, RefreshCw, Sparkles, FlaskConical } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
-import { currentSignals, getFresh, refreshFeed } from "@/lib/feedCache";
+import { currentSignals, getFresh, refreshFeed, type Ranker } from "@/lib/feedCache";
 import Feed from "./Feed";
 
 /**
@@ -21,20 +21,29 @@ export default function HomeFeed() {
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [signalCount, setSignalCount] = useState(0);
+  // Which ranker to ask for. "auto" is the real behaviour: the learned model only once it
+  // has passed its gate. "model" forces a saved-but-unpromoted model so it can be tried.
+  const [ranker, setRanker] = useState<Ranker>("auto");
+  const [servedBy, setServedBy] = useState<string>("content");
+  const [modelAvailable, setModelAvailable] = useState(false);
 
-  const load = useCallback(async (force: boolean) => {
+  const load = useCallback(async (force: boolean, want: Ranker) => {
     setSignalCount(currentSignals().length);
-    const cached = force ? null : getFresh();
+    const cached = force ? null : getFresh(want);
     if (cached) {
       setCards(cached.cards);
       setPersonalized(cached.personalized);
+      setServedBy(cached.ranker);
+      setModelAvailable(cached.modelAvailable);
       return;
     }
     setLoading(true);
-    const entry = await refreshFeed();
+    const entry = await refreshFeed(want);
     if (entry) {
       setCards(entry.cards);
       setPersonalized(entry.personalized);
+      setServedBy(entry.ranker);
+      setModelAvailable(entry.modelAvailable);
       setFailed(false);
     } else {
       setFailed(true);
@@ -44,8 +53,8 @@ export default function HomeFeed() {
   }, []);
 
   useEffect(() => {
-    void load(false);
-  }, [load]);
+    void load(false, ranker);
+  }, [load, ranker]);
 
   return (
     <div>
@@ -68,8 +77,23 @@ export default function HomeFeed() {
             "Popular right now. Like a few pieces to tune this feed."
           )}
         </span>
+        <span className="flex shrink-0 items-center gap-2">
+        {modelAvailable && (
+          <button
+            onClick={() => setRanker(ranker === "model" ? "auto" : "model")}
+            title="Rank with the trained model instead of the hand-tuned scoring"
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 font-medium transition-colors ${
+              servedBy === "model"
+                ? "bg-[var(--accent)] text-white"
+                : "bg-[var(--surface-2)] hover:text-[var(--foreground)]"
+            }`}
+          >
+            <FlaskConical size={13} />
+            {servedBy === "model" ? "Trained model" : "Try trained model"}
+          </button>
+        )}
         <button
-          onClick={() => void load(true)}
+          onClick={() => void load(true, ranker)}
           disabled={loading}
           title="Rebuild the feed from everything you've liked and saved since"
           className="flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--surface-2)] px-3 py-1.5 font-medium transition-colors hover:text-[var(--foreground)] disabled:opacity-40"
@@ -77,6 +101,7 @@ export default function HomeFeed() {
           <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
           Refresh feed
         </button>
+        </span>
       </div>
 
       {cards === null ? (

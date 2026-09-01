@@ -22,7 +22,15 @@ const LIMIT = 80;
 const MAX_AGE_MS = 5 * 60 * 1000;
 
 type Signal = { card_id: string; action: string };
-type Cached = { signature: string; cards: FeedCard[]; at: number; personalized: boolean };
+export type Ranker = "auto" | "model" | "content";
+type Cached = {
+  signature: string;
+  cards: FeedCard[];
+  at: number;
+  personalized: boolean;
+  ranker: string;          // which ranker actually produced it
+  modelAvailable: boolean;
+};
 
 function ids(key: string): string[] {
   try {
@@ -42,8 +50,10 @@ export function currentSignals(): Signal[] {
 
 /** Identifies a set of signals by content, so a cache built from different likes is not
  *  mistaken for a current one. Sorted, because order of liking is irrelevant here. */
-export function signatureOf(signals: Signal[]): string {
-  return signals.map((s) => `${s.action}:${s.card_id}`).sort().join("|");
+/** Includes the requested ranker, so switching rankers never reads the other one's
+ *  cached board. */
+export function signatureOf(signals: Signal[], ranker: Ranker = "auto"): string {
+  return ranker + "::" + signals.map((s) => `${s.action}:${s.card_id}`).sort().join("|");
 }
 
 let memory: Cached | null = null;
@@ -69,10 +79,10 @@ function writeStore(entry: Cached) {
 }
 
 /** The cached feed if it still matches the current signals and hasn't gone stale. */
-export function getFresh(): Cached | null {
+export function getFresh(ranker: Ranker = "auto"): Cached | null {
   const entry = readStore();
   if (!entry) return null;
-  if (entry.signature !== signatureOf(currentSignals())) return null;
+  if (entry.signature !== signatureOf(currentSignals(), ranker)) return null;
   if (Date.now() - entry.at > MAX_AGE_MS) return null;
   return entry;
 }
@@ -80,25 +90,32 @@ export function getFresh(): Cached | null {
 let inFlight: Promise<Cached | null> | null = null;
 
 /** Fetch and cache a fresh ranking. Concurrent callers share one request. */
-export function refreshFeed(): Promise<Cached | null> {
+export function refreshFeed(ranker: Ranker = "auto"): Promise<Cached | null> {
   if (inFlight) return inFlight;
   const signals = currentSignals();
-  const signature = signatureOf(signals);
+  const signature = signatureOf(signals, ranker);
 
   inFlight = (async () => {
     try {
       const res = await fetch("/api/recommend", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ signals, limit: LIMIT }),
+        body: JSON.stringify({ signals, limit: LIMIT, ranker }),
       });
-      const data = (await res.json()) as { cards?: FeedCard[]; personalized?: boolean };
+      const data = (await res.json()) as {
+        cards?: FeedCard[];
+        personalized?: boolean;
+        ranker?: string;
+        model?: { available?: boolean };
+      };
       if (!res.ok || !Array.isArray(data.cards)) return null;
       const entry: Cached = {
         signature,
         cards: data.cards,
         at: Date.now(),
         personalized: Boolean(data.personalized),
+        ranker: data.ranker ?? "content",
+        modelAvailable: Boolean(data.model?.available),
       };
       writeStore(entry);
       return entry;

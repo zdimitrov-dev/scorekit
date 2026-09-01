@@ -39,6 +39,9 @@ def main() -> None:
                         default="both", help="how to hold out the test rows")
     parser.add_argument("--promote", action="store_true",
                         help="save the best fit for the feed to use, if it passes the gate")
+    parser.add_argument("--force", action="store_true",
+                        help="save it even if the gate fails, for testing; the feed will "
+                             "not use it unless asked for by name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -77,9 +80,43 @@ def main() -> None:
     for r in last:
         if not r.importances:
             continue
-        log.info("\n%s — what it leaned on:", r.name)
+        log.info("\n%s: what it leaned on", r.name)
         for feat, val in r.importances[:args.top_features]:
             log.info("   %-28s %+.4f", feat, val)
+
+    # Promotion is judged on the chronological split, which is the production question:
+    # given what this person has done so far, what will they engage with next.
+    scored = train_all(data, args.test_frac, "chronological")
+    base = heuristic_baseline(data, args.test_frac, "chronological")
+    best = max(scored, key=lambda r: r.auc if r.auc == r.auc else -1)
+    ok, reason = gate(best.auc, base.auc, data.positives)
+
+    log.info("\nGate: best is %s. %s", best.name, reason)
+    if not ok and not args.force:
+        log.info("Not promoted. The feed keeps using the content ranker.")
+        log.info("To try it anyway: --force, then request it with ranker=model.")
+        return
+    if not (args.promote or args.force):
+        log.info("Passes the gate. Re-run with --promote to serve it.")
+        return
+
+    path = save_model(best.model, data.feature_names, {
+        "name": best.name,
+        "passed_gate": ok,
+        "gate_reason": reason,
+        "auc": best.auc,
+        "heuristic_auc": base.auc,
+        "precision_at_10": best.precision_at_10,
+        "n_train": best.n_train,
+        "n_test": best.n_test,
+        "positives": data.positives,
+        "feature_names": data.feature_names,
+    })
+    if ok:
+        log.info("Promoted %s to %s. The feed will use it.", best.name, path)
+    else:
+        log.info("Saved %s to %s for testing only.", best.name, path)
+        log.info("The feed still uses the content ranker; request ranker=model to try it.")
 
 
 if __name__ == "__main__":

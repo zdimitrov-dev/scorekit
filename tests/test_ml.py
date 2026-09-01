@@ -178,3 +178,37 @@ def test_ranker_uses_a_learned_relevance_when_given_one():
     ]
     ranked = rank_cards(cards, PIECE_TAGS, signals=[], relevance={"a": 0.99, "b": 0.01})
     assert [c["id"] for c in ranked][0] == "a"
+
+
+def _stub_loaded(promoted):
+    """A LoadedModel whose predict_proba is a constant, so only the gating is under test."""
+    from scorekit.ml.registry import LoadedModel
+
+    class _Const:
+        def predict_proba(self, rows):
+            import numpy as np
+            return np.array([[0.3, 0.7] for _ in rows])
+
+    return LoadedModel(_Const(), list(FEATURE_NAMES), {"passed_gate": promoted})
+
+
+def test_an_unpromoted_model_is_never_used_on_its_own(monkeypatch):
+    """Keeping a fit around to test it must not change what the feed serves."""
+    from scorekit.ml import serve
+    monkeypatch.setattr(serve, "load_model", lambda: _stub_loaded(promoted=False))
+    assert serve.score_cards([_card("chopin-1")], PIECE_TAGS, W, [("chopin-1", 1.0)]) is None
+
+
+def test_an_unpromoted_model_scores_when_asked_for_by_name(monkeypatch):
+    from scorekit.ml import serve
+    monkeypatch.setattr(serve, "load_model", lambda: _stub_loaded(promoted=False))
+    scores = serve.score_cards([_card("chopin-1")], PIECE_TAGS, W, [("chopin-1", 1.0)],
+                               force=True)
+    assert scores == {"c1": 0.7}
+
+
+def test_no_history_means_no_model_scoring(monkeypatch):
+    """A model trained on engagement has nothing to say about someone with none."""
+    from scorekit.ml import serve
+    monkeypatch.setattr(serve, "load_model", lambda: _stub_loaded(promoted=True))
+    assert serve.score_cards([_card("chopin-1")], PIECE_TAGS, W, []) is None

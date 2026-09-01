@@ -6,8 +6,12 @@ hand-tuned heuristic, and worse than chance. Promoting it anyway would quietly d
 feed with nothing to indicate why, so a fit is only saved when it beats the heuristic on
 held-out rows by a real margin, on enough positives for the comparison to mean anything.
 
-Until that happens ``load_model()`` returns nothing and the feed keeps using the content
-ranker, which is the correct outcome rather than a failure.
+Until that happens the feed keeps using the content ranker, which is the correct outcome
+rather than a failure.
+
+A fit that fails the gate can still be **saved for testing**, marked as not promoted. It is
+never used automatically, but a caller can ask for it by name, so the model can be tried
+side by side with the heuristic before it has earned the feed.
 """
 from __future__ import annotations
 
@@ -36,6 +40,11 @@ class LoadedModel:
     model: Any
     feature_names: list[str]
     meta: dict[str, Any]
+
+    @property
+    def promoted(self) -> bool:
+        """Whether it passed the gate. Unpromoted models exist only for testing."""
+        return bool(self.meta.get("passed_gate"))
 
 
 def gate(auc: float, heuristic_auc: float, positives: int) -> tuple[bool, str]:
@@ -91,8 +100,12 @@ def load_model(refresh: bool = False) -> LoadedModel | None:
 
 
 def model_info() -> dict[str, Any]:
+    """What is on disk, and whether the feed will use it on its own."""
     loaded = load_model()
     if loaded is None:
-        return {"available": False}
-    return {"available": True, **{k: v for k, v in loaded.meta.items()
-                                  if k != "feature_names"}}
+        return {"available": False, "promoted": False}
+    return {
+        "available": True,
+        "promoted": loaded.promoted,
+        **{k: v for k, v in loaded.meta.items() if k != "feature_names"},
+    }

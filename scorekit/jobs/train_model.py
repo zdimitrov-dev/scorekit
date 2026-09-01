@@ -13,7 +13,8 @@ from ..db import get_client
 from ..ml.dataset import build_dataset, label_summary
 from ..ml.features import corpus_weights
 from ..ml.registry import gate, save_model
-from ..ml.train import heuristic_baseline, train_all
+from ..ml.train import heuristic_baseline, train_all, tune_forest
+from .simulate import simulated_user_ids
 
 log = logging.getLogger("scorekit.train")
 
@@ -39,6 +40,13 @@ def main() -> None:
                         default="both", help="how to hold out the test rows")
     parser.add_argument("--promote", action="store_true",
                         help="save the best fit for the feed to use, if it passes the gate")
+    parser.add_argument("--simulated", choices=["exclude", "include", "only"],
+                        default="exclude",
+                        help="what to do with rows written by jobs.simulate; excluded by default so a synthetic taste can never promote a model")
+    parser.add_argument("--tune", action="store_true",
+                        help="cross-validate forest hyperparameters instead of the hand-picked ones")
+    parser.add_argument("--tune-iters", type=int, default=40,
+                        help="how many hyperparameter combinations to try")
     parser.add_argument("--force", action="store_true",
                         help="save it even if the gate fails, for testing; the feed will "
                              "not use it unless asked for by name")
@@ -54,6 +62,16 @@ def main() -> None:
     for t in _page(sb, "piece_tags", "piece_id,key,value"):
         tags.setdefault(t["piece_id"], []).append((t["key"], t["value"]))
 
+    sim = simulated_user_ids()
+    before = len(events)
+    if args.simulated == "exclude":
+        events = [e for e in events if e["user_id"] not in sim]
+    elif args.simulated == "only":
+        events = [e for e in events if e["user_id"] in sim]
+    if len(events) != before:
+        log.info("%s %d simulated rows (--simulated %s)",
+                 "kept only" if args.simulated == "only" else "dropped",
+                 abs(before - len(events)), args.simulated)
     log.info("%d interactions, %d cards, %d tagged pieces", len(events), len(cards), len(tags))
     data = build_dataset(events, cards, tags, corpus_weights(tags))
     log.info("dataset: %s\n", label_summary(data))
@@ -64,29 +82,37 @@ def main() -> None:
         )
 
     modes = ["chronological", "cross_user"] if args.mode == "both" else [args.mode]
-    last: list = []
+    by_mode: dict[str, list] = {}
     for mode in modes:
         label = ("same users, their later behaviour" if mode == "chronological"
                  else "users held out entirely — never seen in training")
         log.info("\n=== %s — %s ===", mode, label)
         results = train_all(data, args.test_frac, mode)
+        if args.tune:
+            tuned = tune_forest(data, args.test_frac, mode, args.tune_iters)
+            if tuned is not None:
+                results.append(tuned)
         baseline = heuristic_baseline(data, args.test_frac, mode)
         log.info("%-26s %8s %14s", "model", "ROC-AUC", "precision@10")
         log.info("%s", "-" * 52)
         for r in [baseline, *sorted(results, key=lambda r: -(r.auc if r.auc == r.auc else 0))]:
             log.info("%-26s %8.3f %14.3f", r.name, r.auc, r.precision_at_10)
-        last = results
+        by_mode[mode] = results
 
-    for r in last:
+    # Report what the models leaned on from the chronological fit. Reading them off
+    # the cross_user fit instead (as this used to) describes a model trained on
+    # whatever survives holding out whole users, which on two users is a handful of rows.
+    reported = by_mode.get("chronological") or next(iter(by_mode.values()), [])
+    for r in reported:
         if not r.importances:
             continue
-        log.info("\n%s: what it leaned on", r.name)
+        log.info("\n%s: what it leaned on (chronological fit)", r.name)
         for feat, val in r.importances[:args.top_features]:
             log.info("   %-28s %+.4f", feat, val)
 
     # Promotion is judged on the chronological split, which is the production question:
     # given what this person has done so far, what will they engage with next.
-    scored = train_all(data, args.test_frac, "chronological")
+    scored = by_mode.get("chronological") or train_all(data, args.test_frac, "chronological")
     base = heuristic_baseline(data, args.test_frac, "chronological")
     best = max(scored, key=lambda r: r.auc if r.auc == r.auc else -1)
     ok, reason = gate(best.auc, base.auc, data.positives)

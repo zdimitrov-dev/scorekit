@@ -62,6 +62,15 @@ _BIAS = -2.6
 _SCALE = 1.5
 
 
+def simulated_user_ids() -> set[str]:
+    """The user ids this module writes under.
+
+    Exposed so training can exclude them. Synthetic rows counting toward the promotion
+    gate would let a model trained on a taste we invented go on to rank a real feed.
+    """
+    return {str(uuid.uuid5(_NS, name)) for name in PERSONAS}
+
+
 def _p_like(tags: list[tuple[str, str]], persona: dict[tuple[str, str], float]) -> float:
     score = sum(persona.get(t, 0.0) for t in tags)
     return 1.0 / (1.0 + math.exp(-(_BIAS + _SCALE * score)))

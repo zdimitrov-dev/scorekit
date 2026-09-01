@@ -368,7 +368,19 @@ instrumentation instead of being told by `KEY_WEIGHTS`. Missing view counts are 
 than 0, so trees branch on missingness instead of being lied to.
 
 **Labels.** `like`, `save` and long `click` are positives; `impression` and short clicks
-are negatives. Dwell weights the example.
+are negatives. Dwell weights the example, and those weights are passed to `fit` (they were
+computed and discarded until 2026-09-01, which quietly disabled the whole mechanism).
+
+**Hyperparameters are searched, not guessed** (`train.tune_forest`, `--tune`). A randomised
+cross-validated search over depth, leaf size and feature sampling, run **inside the training
+split only** — choosing hyperparameters against the test rows would make the reported score
+a description of the search rather than of the model. It declines to run when the training
+split holds fewer than three positives. On the current log it picks `max_depth=3` over the
+hand-picked 6, which is the forest being reined in from overfitting 12 positives.
+
+**Synthetic rows cannot promote a model.** `jobs/simulate` writes under deterministic UUIDs
+(`simulate.simulated_user_ids`), and `train_model` excludes them unless asked; `--simulated
+only` trains on them alone, which is how the forest is demonstrated against a known taste.
 
 **Two methodology traps, both handled.** A user's profile is built only from their earlier
 events, so it can never contain the label being predicted. And splitting is per user: a
@@ -442,6 +454,13 @@ signal took three fixes, each found by inspecting what actually landed in the ta
 - **A settle timer.** A card that never leaves the viewport was never recorded, so the top
   of the feed was the least logged. Cards still visible after 8s are written then, which
   right-censors those values.
+- **A second bar, applied at training time.** 0.9s of visibility is cheap on a three-column
+  board: a steady scroll clears it on nearly every card, so most impressions were cards
+  never actually looked at, and the negative class had no consistent meaning. The browser
+  still logs at 0.9s, but `dataset.MIN_IMPRESSION_MS` discards anything under 1.8s when
+  building training rows. Filtering here rather than in the client keeps the raw log intact
+  and applies to rows already stored. Confidence then ramps with time on screen (0.25 at
+  the bar to 1.0 at 8s) instead of stepping.
 
 Sub-400ms modal opens are discarded as mis-clicks. Events batch and flush via `sendBeacon`
 on the way out, since `fetch` is cancelled at unload. All failures are swallowed: this is

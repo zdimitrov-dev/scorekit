@@ -23,6 +23,13 @@ from .features import FEATURE_NAMES, build_profile, features_for
 
 # A click held this long is treated as a positive on its own.
 LONG_CLICK_MS = 8000
+# Below this, an impression is not evidence of rejection. The browser logs one at 0.9s of
+# visibility, which a steady scroll past a three-column board clears on nearly every card,
+# so the bulk of impressions are cards that were never actually looked at. Filtering here
+# rather than in the browser keeps the raw log intact and applies to rows already stored.
+MIN_IMPRESSION_MS = 1800
+# An impression held this long is taken as a considered pass, and weighted fully.
+CONSIDERED_MS = 8000
 # How much each signal contributes to the taste profile (mirrors recommend.SIGNAL_WEIGHTS).
 POSITIVE_WEIGHT = {"save": 1.5, "like": 1.0, "click": 0.6}
 
@@ -39,7 +46,7 @@ def is_positive(event: dict[str, Any]) -> bool:
 def is_negative(event: dict[str, Any]) -> bool:
     """Seen and not engaged with. A short click counts too — opened, and abandoned."""
     if event.get("action") == "impression":
-        return True
+        return (event.get("dwell_ms") or 0) >= MIN_IMPRESSION_MS
     return event.get("action") == "click" and (event.get("dwell_ms") or 0) < LONG_CLICK_MS
 
 
@@ -105,15 +112,23 @@ def build_dataset(
 def _row_weight(event: dict[str, Any]) -> float:
     """Confidence in the label.
 
-    A card glanced at for a second is weak evidence of dislike; one held for half a minute
-    and still not liked is strong. Dwell weights the *example* rather than being a feature,
+    A card that barely cleared the visibility bar is weak evidence of dislike; one held on
+    screen for eight seconds and still not liked is strong. Dwell weights the *example*
+    rather than being a feature,
     because it is only observable after the card is shown and would not exist at scoring
     time — using it as a feature would be leakage.
     """
+    action = event.get("action", "")
     if is_positive(event):
-        return POSITIVE_WEIGHT.get(event.get("action", ""), 1.0)
+        return POSITIVE_WEIGHT.get(action, 1.0)
+    if action == "click":
+        # Opened and abandoned. Deliberate either way, so the label is not in doubt.
+        return 1.0
+    # Impressions ramp from barely-past-the-bar to a considered pass, rather than stepping.
     dwell = event.get("dwell_ms") or 0
-    return 1.0 if dwell >= 4000 else 0.6
+    span = CONSIDERED_MS - MIN_IMPRESSION_MS
+    frac = (dwell - MIN_IMPRESSION_MS) / span if span > 0 else 1.0
+    return 0.25 + 0.75 * max(0.0, min(1.0, frac))
 
 
 def label_summary(data: Dataset) -> str:

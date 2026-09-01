@@ -93,7 +93,8 @@ def test_profile_never_contains_the_row_it_is_predicting():
 def test_warmup_rows_seed_the_profile_without_being_trained_on():
     events = [
         {"id": i, "user_id": "u", "action": "like" if i < 3 else "impression",
-         "card_id": "c1", "piece_id": "chopin-1", "created_at": f"2026-01-0{i}"}
+         "card_id": "c1", "piece_id": "chopin-1", "dwell_ms": 5000,
+         "created_at": f"2026-01-0{i}"}
         for i in range(1, 11)
     ]
     data = build_dataset(events, {"c1": _card("chopin-1")}, PIECE_TAGS, W, warmup=0.4)
@@ -212,3 +213,51 @@ def test_no_history_means_no_model_scoring(monkeypatch):
     from scorekit.ml import serve
     monkeypatch.setattr(serve, "load_model", lambda: _stub_loaded(promoted=True))
     assert serve.score_cards([_card("chopin-1")], PIECE_TAGS, W, []) is None
+
+
+# --- impression quality -----------------------------------------------------
+
+def test_a_glanced_at_card_is_not_evidence_of_rejection():
+    """The browser logs an impression at 0.9s of visibility, which a steady scroll past a
+    three-column board clears on nearly every card. Counting those as rejections fills the
+    negative class with items that were never looked at."""
+    from scorekit.ml.dataset import MIN_IMPRESSION_MS, is_negative
+    assert not is_negative({"action": "impression", "dwell_ms": MIN_IMPRESSION_MS - 1})
+    assert is_negative({"action": "impression", "dwell_ms": MIN_IMPRESSION_MS})
+
+
+def test_impression_confidence_ramps_with_time_on_screen():
+    from scorekit.ml.dataset import CONSIDERED_MS, MIN_IMPRESSION_MS, _row_weight
+    just_past = _row_weight({"action": "impression", "dwell_ms": MIN_IMPRESSION_MS})
+    middling = _row_weight({"action": "impression", "dwell_ms":
+                            (MIN_IMPRESSION_MS + CONSIDERED_MS) // 2})
+    considered = _row_weight({"action": "impression", "dwell_ms": CONSIDERED_MS * 3})
+    assert just_past < middling < considered == 1.0
+    assert just_past == 0.25
+
+
+def test_an_abandoned_click_is_a_confident_negative():
+    """Opening a card and leaving is deliberate, unlike scrolling past one."""
+    from scorekit.ml.dataset import _row_weight
+    assert _row_weight({"action": "click", "dwell_ms": 900}) == 1.0
+
+
+def test_training_passes_per_row_weights_to_the_estimator():
+    """These were computed and dropped on the floor for the whole life of the module."""
+    import numpy as np
+    from scorekit.ml.train import SAMPLE_WEIGHT_PARAM, _build_models
+    rng = np.random.default_rng(0)
+    X = rng.random((60, len(FEATURE_NAMES)))
+    y = (rng.random(60) > 0.75).astype(int)
+    w = rng.random(60) + 0.1
+    for model in _build_models(3.0).values():
+        model.fit(X, y, **{SAMPLE_WEIGHT_PARAM: w})
+        assert model.predict_proba(X).shape == (60, 2)
+
+
+def test_simulated_users_are_identifiable_so_they_can_be_excluded():
+    """A synthetic taste must never count toward the promotion gate."""
+    from scorekit.jobs.simulate import PERSONAS, simulated_user_ids
+    ids = simulated_user_ids()
+    assert len(ids) == len(PERSONAS)
+    assert all(len(i) == 36 for i in ids)

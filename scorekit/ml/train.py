@@ -102,25 +102,27 @@ def _build_models(pos_weight: float) -> dict[str, Any]:
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression
-    from sklearn.pipeline import make_pipeline
+    from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
     from xgboost import XGBClassifier
 
+    # Every estimator is a Pipeline whose final step is named "clf", so per-row sample
+    # weights route to the same place regardless of model (see SAMPLE_WEIGHT_PARAM).
     return {
         # Neither of the first two understands NaN, so missing values are imputed to the
         # column median; only XGBoost gets to treat "missing" as information.
-        "logistic": make_pipeline(
-            SimpleImputer(strategy="median"),
-            StandardScaler(),            # coefficients only comparable on a common scale
-            LogisticRegression(
+        "logistic": Pipeline([
+            ("impute", SimpleImputer(strategy="median")),
+            ("scale", StandardScaler()),  # coefficients only comparable on a common scale
+            ("clf", LogisticRegression(
                 max_iter=2000,
                 C=1.0,                   # inverse regularisation; 1.0 is a firm default
                 class_weight="balanced", # counteract likes being far rarer than impressions
-            ),
-        ),
-        "forest": make_pipeline(
-            SimpleImputer(strategy="median"),
-            RandomForestClassifier(
+            )),
+        ]),
+        "forest": Pipeline([
+            ("impute", SimpleImputer(strategy="median")),
+            ("clf", RandomForestClassifier(
                 n_estimators=400,        # more trees only ever reduces variance; cheap here
                 max_depth=6,             # the main brake on memorising a small dataset
                 min_samples_leaf=5,      # no leaf may rest on one or two examples
@@ -129,9 +131,9 @@ def _build_models(pos_weight: float) -> dict[str, Any]:
                 class_weight="balanced_subsample",
                 random_state=0,
                 n_jobs=-1,
-            ),
-        ),
-        "xgboost": XGBClassifier(
+            )),
+        ]),
+        "xgboost": Pipeline([("clf", XGBClassifier(
             n_estimators=300,
             learning_rate=0.05,          # small steps: more trees each correcting a little
                                          # generalises better than few aggressive ones
@@ -147,8 +149,13 @@ def _build_models(pos_weight: float) -> dict[str, Any]:
             eval_metric="logloss",
             random_state=0,
             n_jobs=-1,
-        ),
+        ))]),
     }
+
+
+# Every model is a Pipeline ending in a step named "clf"; this is how a per-row weight
+# reaches the estimator through one.
+SAMPLE_WEIGHT_PARAM = "clf__sample_weight"
 
 
 def _importances(name: str, model: Any, feature_names: list[str]) -> list[tuple[str, float]]:
@@ -157,7 +164,7 @@ def _importances(name: str, model: Any, feature_names: list[str]) -> list[tuple[
     For logistic regression these are signed coefficients — the sign says whether a feature
     pushes toward or away from a like, which the tree importances cannot tell you.
     """
-    est = model[-1] if hasattr(model, "__getitem__") and hasattr(model, "steps") else model
+    est = model.named_steps["clf"] if hasattr(model, "named_steps") else model
     if hasattr(est, "coef_"):
         vals = est.coef_[0]
     elif hasattr(est, "feature_importances_"):
@@ -185,7 +192,9 @@ def train_all(data: Dataset, test_frac: float = 0.3,
     results: list[Result] = []
     for name, model in _build_models(pos_weight).items():
         try:
-            model.fit(X_tr, y_tr, **({} if name != "logistic" else {}))
+            # Weights carry label confidence: a card glanced at counts for less than one
+            # dwelt on. Dropping them (as this used to) discards that entirely.
+            model.fit(X_tr, y_tr, **{SAMPLE_WEIGHT_PARAM: w_tr})
         except Exception as exc:
             log.warning("%s failed to fit: %s", name, exc)
             continue
@@ -216,4 +225,76 @@ def heuristic_baseline(data: Dataset, test_frac: float = 0.3,
         auc=_auc(y_te, scores) if len(X_te) else float("nan"),
         precision_at_10=_precision_at_k(y_te, scores) if len(X_te) else float("nan"),
         n_train=0, n_test=len(y_te),
+    )
+
+
+# Hand-picked hyperparameters are a guess. This is the range worth searching for a forest
+# on a few hundred rows: how deep a tree may go, how many examples a leaf must rest on, and
+# how many features each split may consider. Depth and leaf size are the two that decide
+# whether the forest generalises or memorises, so both are searched widely.
+FOREST_SEARCH_SPACE = {
+    "clf__n_estimators": [200, 400, 800],
+    "clf__max_depth": [3, 4, 6, 8, None],
+    "clf__min_samples_leaf": [1, 2, 5, 10, 20],
+    "clf__min_samples_split": [2, 5, 10],
+    "clf__max_features": ["sqrt", "log2", 0.3, 0.5],
+    "clf__class_weight": ["balanced", "balanced_subsample", None],
+}
+
+
+def tune_forest(data: Dataset, test_frac: float = 0.3, mode: str = "chronological",
+                n_iter: int = 40, seed: int = 0) -> Result | None:
+    """Search forest hyperparameters by cross-validation, then score on the held-out rows.
+
+    The search runs **inside the training split only**. Choosing hyperparameters by looking
+    at the test rows would make the reported AUC a description of the search rather than of
+    the model, which is the most common way a good-looking number turns out to mean nothing.
+
+    Randomised rather than exhaustive: the grid is a few thousand combinations, most of them
+    near-duplicates, and a random sample of it finds a comparable optimum for a fraction of
+    the fits.
+
+    Returns None when the training split holds too few positives for cross-validation to be
+    meaningful, which is the honest outcome on a small log rather than a fabricated score.
+    """
+    from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
+
+    X_tr, y_tr, w_tr, X_te, y_te = _split_chronological(data, test_frac, mode)
+    positives = int(y_tr.sum())
+    # Each fold needs positives on both sides of the split to score at all.
+    n_splits = min(5, positives)
+    if n_splits < 3:
+        log.warning("skipping the hyperparameter search: %d positives in the training "
+                    "split, need at least 3 to cross-validate", positives)
+        return None
+
+    neg = int((y_tr == 0).sum())
+    base = _build_models((neg / positives) if positives else 1.0)["forest"]
+    search = RandomizedSearchCV(
+        base,
+        FOREST_SEARCH_SPACE,
+        n_iter=n_iter,
+        scoring="roc_auc",           # ranking quality, the same metric promotion uses
+        cv=StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed),
+        n_jobs=-1,
+        random_state=seed,
+        refit=True,                  # refit the winner on the whole training split
+        error_score=0.0,             # a combination that cannot fit scores zero, not raises
+    )
+    search.fit(X_tr, y_tr, **{SAMPLE_WEIGHT_PARAM: w_tr})
+
+    chosen = {k.replace("clf__", ""): v for k, v in search.best_params_.items()}
+    log.info("forest search: %d folds over %d positives, best CV AUC %.3f",
+             n_splits, positives, search.best_score_)
+    for k in sorted(chosen):
+        log.info("   %-20s %s", k, chosen[k])
+
+    model = search.best_estimator_
+    scores = model.predict_proba(X_te)[:, 1] if len(X_te) else np.array([])
+    return Result(
+        name="forest (tuned)",
+        auc=_auc(y_te, scores) if len(X_te) else float("nan"),
+        precision_at_10=_precision_at_k(y_te, scores) if len(X_te) else float("nan"),
+        n_train=len(y_tr), n_test=len(y_te), model=model,
+        importances=_importances("forest", model, data.feature_names),
     )

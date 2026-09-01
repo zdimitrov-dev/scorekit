@@ -149,3 +149,51 @@ def test_a_vouched_channel_still_cannot_smuggle_in_other_instruments():
 
 def test_a_card_with_no_text_is_dropped_rather_than_crashing():
     assert not is_piano(Card(source="youtube", external_id="x", url="u"), "Chopin")
+
+
+# --- cases found by live evaluation across 20 real channels -----------------
+
+def test_computer_keyboards_are_not_pianos():
+    """"keyboard" was piano evidence and leaked 9 of 15 results for a mechanical keyboard
+    round-up. Piano content says "piano"; it does not need the synonym."""
+    for card in [
+        _card("The BEST Mechanical Keyboard I'd Buy At Every Price", author="10BestOnes"),
+        _card("I Tried 70 Keyboards Last Year", author="Hipyo Tech"),
+        _card("The Best Keyboard at Every Price (2026)", author="Reid Wilking"),
+    ]:
+        assert not is_piano(card, "best mechanical keyboard 2026")
+
+
+def test_instrument_names_in_other_languages_are_caught():
+    # a word-boundary match on "violin" missed the German compound
+    assert not is_piano(
+        _card("Bruch - Violinkonzert Nr. 1 g-Moll", author="ARD Klassik"),
+        "violin concerto Bruch",
+    )
+
+
+def test_a_concert_blurb_cannot_rescue_an_orchestral_work():
+    """Programme notes mention a piano often enough that an orchestral violin concerto was
+    being kept on the strength of its own description."""
+    assert not is_piano(
+        _card("Bruch Violin Concerto No. 1 in G minor", author="Mia Huang",
+              desc="Recorded live. Also on the programme: piano works by Brahms."),
+        "violin concerto Bruch",
+    )
+
+
+def test_piano_named_alongside_another_instrument_is_kept():
+    """The Piano Guys are a piano and cello duo. Rejecting on "cello" alone lost half
+    their catalogue; naming the piano in the same breath has to win."""
+    assert is_piano(_card("Cello Wars (Star Wars Parody)", author="The Piano Guys"),
+                    "The Piano Guys")
+
+
+def test_a_generic_form_word_is_not_evidence_of_piano():
+    """The repertoire fallback accepted any musical form, so "violin concerto Bruch"
+    qualified on the word "concerto". Concerto, sonata and symphony exist for every
+    instrument; a nocturne essentially does not."""
+    assert not is_piano(_card("Bruch at the Last Night of the Proms", author="ecodef"),
+                        "violin concerto Bruch")
+    assert is_piano(_card("Nocturne in E flat", author="Some Channel"),
+                    "Chopin Nocturne Op 9 No 2", "Chopin")

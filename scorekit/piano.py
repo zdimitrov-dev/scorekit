@@ -24,18 +24,28 @@ from .tagging import _COMPOSER_ERA, _forms_in, _norm
 # only ever surrounds piano content (Synthesia is a piano-roll visualiser; flowkey and
 # musicnotes sell piano arrangements).
 _PIANO_RE = re.compile(
-    r"\b(?:piano|pianos|pianist|pianists|klavier|clavier|keyboard|harpsichord|"
+    r"\b(?:piano|pianos|pianist|pianists|klavier|clavier|harpsichord|"
     r"synthesia|flowkey|musicnotes|pianote|4[- ]hands|piano solo)\b"
 )
 
-# Another instrument or ensemble is the subject. Checked only *after* the piano evidence,
-# because a piano transcription of a symphony legitimately says "symphony".
+# A different instrument is the subject. Decisive: naming one of these in a title is
+# almost never compatible with a piano performance. Checked only after the piano evidence,
+# so a piano transcription still survives its own title.
 _OTHER_INSTRUMENT_RE = re.compile(
-    r"\b(?:violin|violins|violinist|cello|cellist|viola|guitar|guitarist|flute|clarinet|"
-    r"oboe|bassoon|trumpet|trombone|saxophone|sax|harp|drums|drummer|percussion|"
-    r"orchestra|orchestral|symphony|symphonie|sinfonie|philharmonic|string quartet|"
-    r"quartet|choir|chorus|choral|opera|operatic|vocal|vocals|singer|acapella|"
-    r"a cappella|band|organist)\b"
+    r"\b(?:violin\w*|geige\w*|cello\w*|violoncell\w*|viola|guitar\w*|gitarre\w*|"
+    r"flute|fl\u00f6te|clarinet\w*|oboe|bassoon|trumpet\w*|trombone|saxophon\w*|sax|"
+    r"harp|drums|drummer|percussion|organist|acapella|a cappella)\b"
+)
+
+# Ensemble and vocal words, which are weaker evidence because they show up in the names of
+# pieces and songs as often as in descriptions of who is playing. "i hear a symphony if
+# liszt composed it" is a solo piano cover of a song called "I Hear a Symphony". These
+# reject an unknown upload, but a channel already shown to be a piano channel overrides
+# them; a named instrument it never does.
+_ENSEMBLE_RE = re.compile(
+    r"\b(?:orchestra|orchestral|symphony|symphonie|sinfonie|philharmonic|"
+    r"string quartet|quartet|choir|chorus|choral|opera|operatic|"
+    r"vocal|vocals|singer|band)\b"
 )
 
 # Not music at all. Kept separate from the instrument list because it is decisive: no
@@ -44,6 +54,7 @@ _NON_MUSIC_RE = re.compile(
     r"\b(?:lecture|lectures|philosophy|philosopher|political theory|politics|"
     r"documentary|biography|audiobook|podcast|interview|explained|"
     r"unboxing|review|reviews|gameplay|walkthrough|vlog|recipe|workout|"
+    r"mechanical keyboard|keycaps|keyboards|switches|gaming|laptop|"
     r"tutorial for beginners in (?:python|java)|programming)\b"
 )
 
@@ -69,6 +80,15 @@ def _all_text(card: Card) -> str:
     ]))
 
 
+# Forms that essentially only exist for solo piano. Concerto, sonata and symphony are
+# deliberately absent: every instrument has them, and "violin concerto Bruch" was
+# qualifying as piano repertoire on the word "concerto" alone.
+_PIANO_FORMS = {
+    "nocturne", "prelude", "etude", "mazurka", "polonaise", "ballade", "scherzo",
+    "impromptu", "gymnopedie", "invention", "arabesque", "waltz", "rag", "intermezzo",
+}
+
+
 def _is_piano_repertoire(query: str, composer: str | None) -> bool:
     """Does the *piece* being ingested belong to the piano canon?
 
@@ -79,7 +99,9 @@ def _is_piano_repertoire(query: str, composer: str | None) -> bool:
     """
     text = f"{composer or ''} {query}"
     tokens = set(re.findall(r"[a-z]+", _norm(text)))
-    return bool(tokens & set(_COMPOSER_ERA)) or bool(_forms_in(text))
+    if tokens & set(_COMPOSER_ERA):
+        return True
+    return bool(_forms_in(text) & _PIANO_FORMS)
 
 
 def is_piano(card: Card, query: str = "", composer: str | None = None) -> bool:
@@ -88,15 +110,22 @@ def is_piano(card: Card, query: str = "", composer: str | None = None) -> bool:
     if not claims:
         return False
 
-    # 1. Says it is piano — anywhere, description included. Deliberately ahead of the
-    #    rejection rules: Kassia's "Beethoven - Symphony No. 5" is a Liszt piano
-    #    transcription and only its description says so.
+    # 1. The title or channel names another instrument, and does not name a piano.
+    #    Ahead of the piano evidence below because a concert blurb mentions a piano often
+    #    enough to rescue an orchestral violin concerto from its own title. Requiring the
+    #    absence of "piano" matters: The Piano Guys are a piano and cello duo, and
+    #    rejecting on "cello" alone lost half their catalogue.
+    if _OTHER_INSTRUMENT_RE.search(claims) and not _PIANO_RE.search(claims):
+        return False
+    # 2. Says it is piano, anywhere, description included. Ahead of the *ensemble* words
+    #    below, so Kassia's "Beethoven - Symphony No. 5" survives its own title: it is a
+    #    Liszt piano transcription and only the description says so.
     if _PIANO_RE.search(_all_text(card)):
         return True
-    # 2. Declares itself something else — read from the title and channel only.
-    if _NON_MUSIC_RE.search(claims) or _OTHER_INSTRUMENT_RE.search(claims):
+    # 3. Declares itself something else, read from the title and channel only.
+    if _NON_MUSIC_RE.search(claims) or _ENSEMBLE_RE.search(claims):
         return False
-    # 3. Silent either way: trust what the piece is.
+    # 4. Silent either way: trust what the piece is.
     return _is_piano_repertoire(query, composer)
 
 
@@ -128,6 +157,9 @@ def filter_piano(cards: list[Card], query: str = "", composer: str | None = None
         if is_piano(c, query, composer)
         # a channel this result set has already shown to be a piano channel, provided
         # this particular upload isn't declaring itself something else
+        # A proven piano channel vouches for its other uploads, overriding the ensemble
+        # words but never a named instrument: a pianist posting a song called "I Hear a
+        # Symphony" is ordinary, a pianist posting a violin concerto is not.
         or (c.author and _norm(c.author) in channels
             and not _NON_MUSIC_RE.search(_claims_text(c))
             and not _OTHER_INSTRUMENT_RE.search(_claims_text(c)))

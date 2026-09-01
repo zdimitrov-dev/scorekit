@@ -37,7 +37,7 @@ DROP_THRESHOLD = 0.35
 # them forever. Without it, a query searched before a fix keeps its old, worse results
 # permanently: adding author matching fixed "Birru" for new queries while the already-
 # cached "Birru" went on returning the single wrong card it had matched by title.
-MATCHER_VERSION = 3
+MATCHER_VERSION = 4
 
 
 def _tokens(text: str) -> list[str]:
@@ -67,6 +67,27 @@ def _longest_run(needle: list[str], haystack: list[str]) -> int:
     return best
 
 
+# Words that narrow the domain rather than naming anything. Searching "sook piano" is the
+# same request as "sook" plus a hint about what kind of result is wanted, so these are
+# stripped before matching. Leaving them in required the channel to be literally called
+# "sook piano" and dropped 20 of that artist's 25 videos.
+_QUALIFIERS = {
+    "piano", "pianist", "keyboard", "music", "song", "songs", "cover", "covers",
+    "tutorial", "tutorials", "official", "channel", "youtube", "playlist", "live",
+    "hd", "hq", "full", "best", "top",
+}
+
+
+def _identity_tokens(q: list[str]) -> list[str]:
+    """The part of a query that actually names something.
+
+    Falls back to the whole query when nothing is left, so a bare "piano" still behaves
+    as a search rather than matching everything.
+    """
+    core = [t for t in q if t not in _QUALIFIERS]
+    return core or q
+
+
 def _names_author(q: list[str], author: list[str]) -> bool:
     """True if the query reads as this author's name.
 
@@ -76,12 +97,17 @@ def _names_author(q: list[str], author: list[str]) -> bool:
     *Rousseau*. Requiring an exact contiguous run instead dropped 11 of 12 correct
     results for that search.
 
+    Domain words are stripped first (see ``_QUALIFIERS``): "sook piano" names the channel
+    *sook*, and requiring "piano" to appear in the channel name too dropped 20 of that
+    artist's 25 videos.
+
     Still strict enough to protect the filter: matching must be in order, and a prefix
     needs three characters, so "Piano Sonata" does not name a channel called "Piano
     Tutorials" and cannot rescue a card the title already rejected.
     """
     if not q or not author:
         return False
+    q = _identity_tokens(q)
     i = 0
     for token in author:
         if i < len(q) and (token == q[i] or (len(q[i]) >= 3 and token.startswith(q[i]))):

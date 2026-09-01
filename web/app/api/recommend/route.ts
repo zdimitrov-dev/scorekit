@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     });
   } catch {
     return NextResponse.json(
-      { error: "recommend backend unreachable — is the API running?" },
+      { error: "recommend backend unreachable. Is the API running?" },
       { status: 502 },
     );
   }

@@ -72,7 +72,7 @@ export default function FavoritesFeed() {
       <Feed
         cards={cards}
         maxColumns={3}
-        emptyLabel="Nothing saved yet — press Save on a card to keep it here."
+        emptyLabel="Nothing saved yet. Press Save on a card to keep it here."
       />
     </div>
   );

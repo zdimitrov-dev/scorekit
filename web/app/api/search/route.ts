@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     });
   } catch {
     return NextResponse.json(
-      { error: "search backend unreachable — is the API running?" },
+      { error: "search backend unreachable. Is the API running?" },
       { status: 502 },
     );
   }

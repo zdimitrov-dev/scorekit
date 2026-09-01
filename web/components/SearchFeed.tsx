@@ -169,7 +169,7 @@ export default function SearchFeed() {
             // into it fires no focus event at all.
             onClick={() => setRecentOpen(true)}
             onKeyDown={(e) => e.key === "Escape" && setRecentOpen(false)}
-            placeholder="Search a piece — e.g. “Für Elise” or “Chopin Nocturne”"
+            placeholder="Search a piece, e.g. “Für Elise” or “Chopin Nocturne”"
             className="w-full rounded-full border border-[var(--border)] bg-[var(--surface)] py-3 pl-11 pr-24 text-sm outline-none transition-colors focus:border-white/25"
           />
           <button

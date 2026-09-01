@@ -1,24 +1,17 @@
 """Is this YouTube result actually piano music?
 
-scorekit is a piano platform, but YouTube search is not. A query like "Rousseau" returns
-that pianist's covers *and* political-philosophy lectures; "Taylor Swift Cruel Summer"
-returns music videos. Anything let through lands in the corpus permanently and then feeds
-the recommender, so the noise compounds.
+scorekit is a piano platform, but YouTube search is not: a query like "Rousseau" returns
+that pianist's covers alongside political-philosophy lectures. Anything let through lands
+in the corpus permanently and then feeds the recommender.
 
 Only YouTube needs this. IMSLP is filtered at the catalogue level by instrument category,
 and MuseScore results are sheet music by construction.
 
-**Why not just look for the word "piano".** Two real results break that in opposite
-directions, and both must come out right:
-
-- "Chopin - Nocturne op.9 No.2" (andrea romano) never says *piano* — not in the title, not
-  in the description. It is unmistakably piano repertoire, and a keyword filter drops it.
-- "Beethoven - Symphony No. 5" (Kassia) is a **Liszt piano transcription**, while the
-  identically-titled DW Classical Music upload is an orchestra. The title cannot separate
-  them; the surrounding evidence can.
-
-So the evidence is layered, strongest first, and only the last layer falls back to what the
-*piece* is rather than what the video says about itself.
+Matching the word "piano" alone fails in both directions, and two real results prove it:
+"Chopin - Nocturne op.9 No.2" never says piano anywhere, while Kassia's "Beethoven -
+Symphony No. 5" is a Liszt piano transcription. So the evidence is layered, strongest
+first, and only the last layer falls back to what the piece is rather than what the video
+says about itself.
 """
 from __future__ import annotations
 

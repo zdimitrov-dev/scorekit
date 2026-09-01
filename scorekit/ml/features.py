@@ -1,22 +1,19 @@
 """Turning a (user, card) pair into a feature vector.
 
-**The central design choice is what a "user" contributes to the row.** Feeding raw tags and
-hoping the model discovers "this person likes Chopin" needs one column per composer, and
-with 43 composers and a few hundred rows that is hopeless — the model would see two or
-three examples per column.
+The central design choice is what a "user" contributes to the row. Feeding raw tags needs
+one column per composer, and with 43 composers and a few hundred rows each column would
+carry two or three examples.
 
-Instead the features are **crossed with the user's history**: not *"is this Chopin?"* but
-*"how much does this user's history overlap this piece, on the composer axis?"* That turns
-43 sparse columns into one dense one that means the same thing for every user, works from
-the first like, and — because there is a separate affinity per tag kind — lets the model
-learn how much each *kind* of tag matters.
+Instead the features are crossed with the user's history: not "is this Chopin?" but "how
+much does this user's history overlap this piece on the composer axis?". That turns 43
+sparse columns into one dense one that means the same thing for every user and works from
+the first like.
 
-That last part is the point of the whole exercise. ``recommend.KEY_WEIGHTS`` says composer
-matters 1.0 and instrumentation 0.25 because **those numbers were chosen by hand**. The
-model gets the same axes as separate inputs and derives their importance from behaviour, so
-the two can be compared directly.
-
-The heuristic ranker is therefore a *feature generator* for the learned one, not its rival.
+Because there is a separate affinity per tag kind, the model can learn how much each kind
+matters. ``recommend.KEY_WEIGHTS`` says composer matters 1.0 and instrumentation 0.25
+because those numbers were chosen by hand; the model derives them from behaviour, so the
+two can be compared. The heuristic ranker is therefore a feature generator for the learned
+one, not its rival.
 """
 from __future__ import annotations
 

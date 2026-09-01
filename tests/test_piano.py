@@ -61,7 +61,7 @@ def test_artist_uploads_are_kept_on_piano_evidence():
 def test_sheet_music_tooling_counts_as_piano_evidence():
     # flowkey / musicnotes / Synthesia only ever surround piano content
     c = _card("Moving Forward", author="Katherine Cordova",
-              desc="Sheet music ▶ musicnotes.com/l/BRchQ  Learn with flowkey")
+              desc="Sheet music: musicnotes.com/l/BRchQ  Learn with flowkey")
     assert is_piano(c, "Kat Cordova")
 
 

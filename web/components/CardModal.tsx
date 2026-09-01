@@ -21,7 +21,7 @@ const SOURCE_LABEL: Record<Source, string> = {
 const MIN_VIEW_MS = 400;
 
 const SAMPLE_COMMENTS = [
-  { user: "pianoDreamer", text: "This arrangement is gorgeous 😍", when: "2d" },
+  { user: "pianoDreamer", text: "This arrangement is gorgeous.", when: "2d" },
   { user: "chopin_fan", text: "Finally a version I can actually play!", when: "5d" },
   { user: "keys_and_tea", text: "The left hand at 1:12 is so satisfying.", when: "1w" },
 ];

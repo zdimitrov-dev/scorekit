@@ -2,17 +2,16 @@
 
 Two decisions here matter more than any model choice.
 
-**What counts as a positive.** ``like`` and ``save`` are explicit, but rare — most people
-never press either. A long ``click`` (the card was opened and held open) is the strongest
-*behavioural* signal the feed produces and is far more common, so it counts too. An
-``impression`` — seen and passed over — is the negative, which is the only reason negatives
-exist at all: the feed has no reject control.
+**What counts as a positive.** ``like`` and ``save`` are explicit but rare, since most
+people never press either. A long ``click`` is the strongest behavioural signal the feed
+produces and is far more common, so it counts too. An ``impression`` is the negative,
+which is the only reason negatives exist at all: the feed has no reject control.
 
 **Leakage.** A user's profile must be built only from engagements the model is allowed to
 have seen. Building it from everything and then predicting a held-out like means the
-profile already contains that like's tags, and the model scores ~perfectly while having
-learned nothing. Splitting is therefore **chronological**: the profile comes from the past,
-the evaluation from the future — which is also how it would run in production.
+profile already contains that like's tags, and the model scores near-perfectly having
+learned nothing. Splitting is therefore chronological, which is also how it would run in
+production.
 """
 from __future__ import annotations
 

@@ -1,20 +1,16 @@
-""""More like this" — cards similar to one specific card.
+""""More like this": cards similar to one specific card.
 
-Distinct from ``scorekit.recommend``, and deliberately so. The home feed ranks against
-*your accumulated taste*; this ranks against **the single card you are looking at**, and
-nothing else. Opening a Birru performance should surface more Birru whether or not Birru is
-anywhere in your history — that is the whole point of clicking in.
+Distinct from ``scorekit.recommend``. The home feed ranks against accumulated taste; this
+ranks against the single card being viewed. Opening a Birru performance should surface
+more Birru whether or not Birru appears anywhere in the viewer's history.
 
-Because the anchor is a card rather than a profile, none of this reads or writes the user's
-taste vector, so browsing here cannot drag the home feed around.
+Because the anchor is a card rather than a profile, none of this reads or writes the
+user's taste vector, so browsing here cannot drag the home feed around.
 
-Similarity has two halves, because tags alone are too coarse:
-
-- **Tag overlap** with the anchor's piece, weighted by rarity exactly as the home feed
-  weights it. This is what makes "same creator" and "same composer" dominate.
-- **Title-word overlap**, which recovers what the tags cannot express. A card titled
-  "Birru — Laufey, From The Start" and another Laufey arrangement share no tag at all, since
-  the repertoire a performer covers is not part of a piece's tag set. The words carry it.
+Similarity has two halves. Tag overlap with the anchor's piece makes same-creator and
+same-composer dominate. Title-word overlap recovers what tags cannot express: a
+performer's repertoire is not part of a piece's tag set, so "Birru playing Laufey" and
+another Laufey arrangement share no tag at all.
 """
 from __future__ import annotations
 

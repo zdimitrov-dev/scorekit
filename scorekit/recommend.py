@@ -1,24 +1,18 @@
-"""Content-based recommender — rank cards against a user's tag profile.
+"""Content-based recommender: rank cards against a user's tag profile.
 
-This is the **non-collaborative** half of the home feed: it recommends from what a piece
-*is* (its ``piece_tags``), never from what other users did. That ordering is deliberate —
+This is the non-collaborative half of the home feed. It recommends from what a piece *is*
+(its ``piece_tags``), never from what other users did. That ordering is deliberate:
 collaborative filtering cannot say anything about a user with no neighbours or a piece
-nobody has touched yet, and this project starts with exactly one user and a corpus that
-grows one search at a time. Content-based ranking works from the first like, so it is
-both the launch ranker and, later, the cold-start fallback the collaborative model defers
-to. The two are designed to compose: ``score = w·content + (1-w)·collaborative``.
+nobody has touched, and this project starts with one user and a corpus that grows one
+search at a time. Content-based ranking works from the first like, so it is both the
+launch ranker and the cold-start fallback the learned model defers to.
 
-The pipeline is four steps:
+Four steps: build a profile from liked pieces, score each candidate against it, blend in a
+popularity prior, then diversify so one piece cannot own the board.
 
-1. **Profile** — turn liked/saved pieces into a weighted tag vector (``build_profile``).
-2. **Score** — cosine-style match of each candidate piece's tags against that vector,
-   with rarer tags counting for more (``idf_weights``).
-3. **Blend** — mix in a small popularity prior so a thin profile still ranks sensibly.
-4. **Diversify** — greedily re-order so one piece or composer cannot own the board.
-
-Nothing here talks to the database; ``scorekit/api.py`` supplies rows and stores nothing
-back. That keeps the ranker unit-testable and lets the profile source change (localStorage
-today, the ``interactions`` table once Phase 5 lands) without touching the algorithm.
+Nothing here touches the database. ``api.py`` supplies rows and stores nothing back, which
+keeps the ranker unit-testable and lets the profile source change without touching the
+algorithm.
 """
 from __future__ import annotations
 

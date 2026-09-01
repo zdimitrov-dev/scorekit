@@ -1,27 +1,25 @@
-"""Seed the corpus from IMSLP's catalogue, instead of waiting to be searched.
+"""Seed the corpus from IMSLP's catalogue instead of waiting to be searched.
 
-Ingestion is otherwise **reactive**: nothing enters the database until a user searches for
-it, so the corpus mirrors whatever has already been looked up. That caps the recommender
-twice over. It can only ever suggest something adjacent to a previous search — it can never
-surprise anyone with a piece nobody thought to look for — and with only a handful of pieces
-the IDF statistics it weights tags by are computed from noise. Neither problem is fixed by
-more *interactions*; both need more *items*.
+Ingestion is otherwise reactive: nothing enters the database until a user searches for it,
+so the corpus mirrors previous searches. That caps the recommender twice. It can never
+surprise anyone with a piece nobody thought to look up, and on a small corpus the IDF
+statistics it weights tags by are computed from noise. Neither is fixed by more
+interactions; both need more items.
 
-IMSLP is the right source to seed from: it costs no API quota (unlike YouTube's ~100
-searches/day), its page titles carry the composer explicitly, and its work pages carry the
-style and instrumentation that make a piece rankable the moment it lands.
+IMSLP is the right source to seed from: no API quota (unlike YouTube's ~100 searches a
+day), page titles carry the composer, and work pages carry the style and instrumentation
+that make a piece rankable on arrival.
 
-Seeding is **composer-scoped, not category-scoped**. ``Category:For piano`` holds 54,000+
-pages ordered alphabetically, which yields mostly obscurity; a curated composer list yields
-repertoire people recognise. Each composer's category is then filtered to piano works,
-because the category holds everything they wrote.
+Seeding is composer-scoped, not category-scoped. ``Category:For piano`` holds 54,000+
+pages ordered alphabetically, which yields mostly obscurity; a curated composer list
+yields repertoire people recognise. Each composer's category is then filtered to piano
+works, because it holds everything they wrote.
 
-Only IMSLP cards are created. YouTube and MuseScore stay lazy — hydrated when a piece is
-actually searched — so seeding thousands of pieces never touches the quota-limited sources.
+Only IMSLP cards are created. YouTube and MuseScore stay lazy, so seeding thousands of
+pieces never touches the quota-limited sources.
 
     python -m scorekit.jobs.seed --dry-run
     python -m scorekit.jobs.seed --per-composer 15
-    python -m scorekit.jobs.seed --composers "Chopin, Frédéric" --per-composer 40
 """
 from __future__ import annotations
 

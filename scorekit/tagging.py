@@ -1,36 +1,20 @@
-"""Feature extraction — derive ``piece_tags`` rows from a piece and its cards.
+"""Feature extraction: derive ``piece_tags`` rows from a piece and its cards.
 
-These tags are the feature space the **content-based recommender** ranks over
-(``scorekit/recommend.py``). Keeping extraction here, separate from both the
-connectors that fetch data and the ranker that consumes it, means the tag vocabulary
-can change without touching either.
+These tags are the feature space the recommender ranks over. Keeping extraction here,
+separate from the connectors that fetch data and the ranker that consumes it, lets the
+vocabulary change without touching either.
 
-Why tags are derived at the **piece** level: enrichment is uneven across sources. A
-YouTube card knows almost nothing about the music, while one IMSLP card carries style,
-instrumentation and licensing. Because every card for the same real piece shares a
-``piece_id``, a single enriched card lets us tag the piece — and every card attached to
-it, including the bare YouTube ones, becomes rankable. This is exactly what the shared
-``piece_id`` normalization was built for.
+Tags are derived at the **piece** level because enrichment is uneven. A YouTube card knows
+almost nothing about the music, while one IMSLP card carries style, instrumentation and
+licensing. Since every card for a piece shares a ``piece_id``, one enriched card makes the
+whole piece rankable.
 
-Tag keys currently produced:
+Keys produced: composer, era, style, instrumentation, form, format, creator,
+public_domain. Values are lowercased and whitespace-collapsed.
 
-``composer``        the composing artist (IMSLP's ``author`` is authoritative)
-``era``             baroque / classical / romantic / impressionist / modern
-``style``           IMSLP's own ``piece_style`` string, kept verbatim-ish
-``instrumentation`` piano / organ / voice, piano / ...
-``form``            nocturne / prelude / sonata / ... — inferred from titles
-``format``          tutorial / cover / performance — what kind of content it attracts
-``creator``         the channel an artist entry is about, when one dominates it
-``public_domain``   "true" when a free score exists
-
-Values are lowercased and whitespace-collapsed so that "Organ" and "organ" are one tag.
-
-**Only high-confidence cards define a piece's identity.** The attribution filter keeps
-loosely-related neighbours on purpose (a soft narrow, so a smaller related work is still
-discoverable), but those neighbours must not describe the piece: deriving from every card
-tagged Debussy's "Clair de lune" as a *rag* and Beethoven's "Moonlight Sonata" with the
-composer of a guitar arrangement of it. Identity tags therefore come from cards scoring
-at least ``CONFIDENT_MATCH``, falling back to all cards only when none qualify.
+Only cards scoring at least ``CONFIDENT_MATCH`` define a piece. The attribution filter
+deliberately keeps loosely-related neighbours so smaller works stay discoverable, but
+those must not describe the piece.
 """
 from __future__ import annotations
 

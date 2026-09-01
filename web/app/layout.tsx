@@ -10,7 +10,7 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 
 export const metadata: Metadata = {
   title: "scorekit",
-  description: "Discover piano music — a visual board of tutorials, scores, and performances.",
+  description: "Discover piano music. A visual board of tutorials, scores, and performances.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

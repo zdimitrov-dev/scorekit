@@ -1,32 +1,21 @@
 """Train and compare candidate rankers.
 
-Three models are fitted, not one, because at a few hundred rows **which one wins is an
-empirical question** and assuming the fanciest is best is how people ship worse models:
+Three models are fitted, not one, because at a few hundred rows which one wins is an
+empirical question, and assuming the fanciest is best is how people ship worse models.
 
-``logistic``  The baseline, and a serious contender. Linear, so it cannot express "romantic
-              AND nocturne", but at small *n* that limitation is also protection — there is
-              far less to overfit. Its coefficients are directly comparable to the
-              hand-tuned ``recommend.KEY_WEIGHTS``, which is the comparison this project
-              exists to make. Any model that cannot beat it is not earning its complexity.
+``logistic``  The baseline, and a serious contender. Linear, so it cannot express
+              "romantic AND nocturne", but at small n that limitation is also protection.
+              Its coefficients are directly comparable to the hand-tuned KEY_WEIGHTS.
+``forest``    Many deep trees on bootstrapped samples, averaged. Each overfits happily;
+              averaging decorrelated trees cancels most of it, so it needs little tuning.
+``xgboost``   Trees fitted in sequence, each on what the ensemble still gets wrong.
+              Usually strongest on tabular data, and the only one here that reads NaN as
+              a branch rather than needing it filled in. It will also happily memorise a
+              small dataset, so it is the most heavily regularised.
 
-``forest``    Random Forest — many deep trees on bootstrapped samples, averaged. Each tree
-              overfits happily; averaging decorrelated trees cancels most of it, so it is
-              hard to get badly wrong and needs almost no tuning. It usually trails boosting
-              on tabular data because every tree fits the same target independently rather
-              than correcting the previous one's mistakes.
-
-``xgboost``   Gradient boosting — trees fitted **in sequence**, each one on what the
-              ensemble still gets wrong. Typically the strongest on tabular data, and the
-              only one of the three that reads NaN as a branch rather than needing it filled
-              in, which matters here because a missing view count is a real fact about the
-              source. The cost is that it will happily memorise a small dataset, so it is
-              the most heavily regularised of the three.
-
-**Evaluation is ranking-first.** Accuracy is meaningless on a feed: with likes rare, a model
-that predicts "no" every time scores ~95%. What matters is whether the things a user
-engaged with are pushed to the *top*, so the headline metrics are ROC-AUC (probability a
-random positive outranks a random negative) and precision@10 (how much of a screenful is
-worth looking at). Both are compared against the existing heuristic on the same rows.
+Evaluation is ranking-first. Accuracy is meaningless on a feed: with likes rare, a model
+that always predicts "no" scores about 95%. The headline metrics are ROC-AUC and
+precision@10, both compared against the existing heuristic on the same rows.
 """
 from __future__ import annotations
 

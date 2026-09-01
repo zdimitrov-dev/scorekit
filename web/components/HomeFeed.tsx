@@ -65,7 +65,7 @@ export default function HomeFeed() {
           ) : failed ? (
             "Recommendations are offline."
           ) : (
-            "Popular right now — like a few pieces to tune this feed."
+            "Popular right now. Like a few pieces to tune this feed."
           )}
         </span>
         <button
@@ -99,7 +99,7 @@ export default function HomeFeed() {
         <Feed
           cards={cards}
           maxColumns={3}
-          emptyLabel="Nothing here yet — search for a piece to get started."
+          emptyLabel="Nothing here yet. Search for a piece to get started."
         />
       )}
     </div>

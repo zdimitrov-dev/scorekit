@@ -18,6 +18,7 @@ import logging
 from ..connectors import CONNECTORS
 from ..connectors.base import ConnectorUnavailable
 from ..matching import annotate_and_filter
+from ..piano import filter_piano
 from ..models import Card, Piece
 from ..normalize import normalize_slug
 from ..store import upsert_cards, upsert_piece
@@ -41,6 +42,12 @@ def ingest(query: str, composer: str | None = None, limit: int = 20,
             log.warning("[%s] skipped: %s", connector.source, exc)
             continue
         log.info("[%s] returned %d card(s)", connector.source, len(found))
+        # YouTube search is not a piano index — see scorekit.piano. The other sources are
+        # already piano-scoped, by instrument category and by being sheet music.
+        if connector.source == "youtube":
+            found, off_topic = filter_piano(found, query, composer)
+            if off_topic:
+                log.info("[youtube] dropped %d non-piano result(s)", off_topic)
         cards.extend(found)
 
     # Attribution: score each card against the queried piece and drop clear

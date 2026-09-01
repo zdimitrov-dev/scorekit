@@ -28,6 +28,7 @@ from .jobs.ingest import ingest
 from .matching import MATCHER_VERSION, annotate_and_filter
 from .models import Piece
 from .normalize import normalize_slug
+from .piano import filter_piano
 from .recommend import rank_cards
 from .store import log_events, retag_piece, upsert_cards, upsert_piece
 
@@ -109,6 +110,13 @@ def _ingest_stream(q: str, composer: str | None, limit: int, refresh: bool) -> I
         except (NotImplementedError, ConnectorUnavailable) as exc:
             log.warning("[%s] skipped: %s", connector.source, exc)
             continue
+        # YouTube search is not a piano index: a query like "Rousseau" returns political
+        # philosophy alongside that pianist's covers. IMSLP is already filtered by
+        # instrument category and MuseScore returns sheet music by construction.
+        if connector.source == "youtube":
+            found, off_topic = filter_piano(found, q, composer)
+            if off_topic:
+                log.info("[youtube] dropped %d non-piano result(s) for %r", off_topic, q)
         kept, _dropped = annotate_and_filter(found, q, composer)
         if connector.source == "imslp":
             kept = connector.enrich_cards(kept)

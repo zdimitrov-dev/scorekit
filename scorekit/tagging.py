@@ -90,6 +90,12 @@ _COMPOSER_ERA: dict[str, str] = {
     "prokofiev": "modern", "shostakovich": "modern", "bartok": "modern",
     "stravinsky": "modern", "glass": "modern", "einaudi": "modern",
     "gershwin": "modern", "joplin": "modern",
+    # Contemporary piano composers. Not classical canon, but they are among the most
+    # played piano repertoire on YouTube, and omitting them made the piano filter reject
+    # Yiruma's own uploads of "River Flows in You" for lack of any recognised context.
+    "yiruma": "contemporary", "hisaishi": "contemporary", "sakamoto": "contemporary",
+    "tiersen": "contemporary", "arnalds": "contemporary", "richter": "contemporary",
+    "nyman": "contemporary", "zimmer": "contemporary", "williams": "contemporary",
 }
 
 # IMSLP's piece_style vocabulary -> our era values.

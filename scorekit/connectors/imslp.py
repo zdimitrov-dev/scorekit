@@ -61,6 +61,26 @@ _LINKWORK_RE = re.compile(r"\{\{LinkWork(?:N)?\|([^{}]*)\}\}")
 # Cap on how many works a single disambiguation page expands into.
 MAX_DISAMBIG_TARGETS = 5
 
+# What counts as piano repertoire when seeding from the catalogue. Chosen by measuring
+# coverage per composer, because the obvious answer is wrong in both directions:
+#
+#   "For piano" alone collapses the baroque — IMSLP files that music by the instrument it
+#   was written for, so Bach has 1 work in it, Scarlatti 0 and Handel 2. Keyboard and
+#   harpsichord repertoire is played on piano and belongs here (Bach 1 -> 277,
+#   Scarlatti 0 -> 558), at no cost to anyone else.
+#
+#   Adding "For piano (arr)" would nearly double Mozart (111 -> 326) and Beethoven
+#   (93 -> 179), but with piano reductions of symphonies and concertos — and it lets in
+#   works like Chopin's Cello Sonata, which is not piano repertoire however it is filed.
+#
+# "Scores featuring the piano" is excluded for the same reason: it covers songs and chamber
+# music where the piano merely accompanies.
+PIANO_CATEGORIES = (
+    "Category:For piano",
+    "Category:For keyboard",
+    "Category:For harpsichord",
+)
+
 
 def _parse_title(page_title: str) -> tuple[str, str | None]:
     """Split an IMSLP page title into ``(work_title, composer)``.
@@ -204,6 +224,75 @@ class ImslpConnector(Connector):
             if card is not None:
                 cards.append(card)
         return cards
+
+    def category_members(self, category: str, limit: int | None = None) -> list[str]:
+        """Work-page titles in an IMSLP category, following pagination.
+
+        Used to seed the corpus from the catalogue rather than waiting for someone to
+        search for a piece (``scorekit.jobs.seed``). IMSLP runs an older MediaWiki, which
+        returns its continuation token under ``query-continue`` rather than ``continue``.
+        """
+        titles: list[str] = []
+        params: dict[str, Any] = {
+            "action": "query",
+            "list": "categorymembers",
+            "cmtitle": category,
+            "cmtype": "page",          # skip subcategories; composer pages are flat
+            "cmlimit": "500",
+            "format": "json",
+        }
+        while True:
+            resp = self.client.get(IMSLP_API, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            page = data.get("query", {}).get("categorymembers", [])
+            titles.extend(m["title"] for m in page if "title" in m)
+            if limit is not None and len(titles) >= limit:
+                return titles[:limit]
+
+            token = (
+                (data.get("continue") or {}).get("cmcontinue")
+                or (data.get("query-continue", {}).get("categorymembers") or {}).get("cmcontinue")
+            )
+            if not token or not page:
+                return titles
+            params = {**params, "cmcontinue": token}
+
+    def piano_titles(self, titles: list[str]) -> list[str]:
+        """Filter work titles down to those IMSLP files under a piano category.
+
+        A composer's category holds everything they wrote — songs, chamber, orchestral —
+        so seeding from it unfiltered would fill a piano platform with string quartets.
+        ``Scores featuring the piano`` is deliberately *not* accepted on its own: it
+        includes songs with piano accompaniment, which are not piano repertoire.
+        Checked in batches of 50, MediaWiki's per-request title limit.
+        """
+        keep: list[str] = []
+        for i in range(0, len(titles), 50):
+            batch = titles[i:i + 50]
+            resp = self.client.get(IMSLP_API, params={
+                "action": "query",
+                "prop": "categories",
+                "titles": "|".join(batch),
+                "clcategories": "|".join(PIANO_CATEGORIES),
+                "cllimit": "500",
+                "format": "json",
+            })
+            resp.raise_for_status()
+            pages = resp.json().get("query", {}).get("pages", {})
+            for page in pages.values():
+                if page.get("categories") and page.get("title"):
+                    keep.append(page["title"])
+        return keep
+
+    def card_for_page(self, page_title: str) -> Card | None:
+        """A card built straight from a known work-page title.
+
+        Seeding walks the catalogue, so it already holds canonical page titles and has no
+        search result to convert — and unlike a search hit, a catalogue title needs no
+        redirect check, because categories list real pages.
+        """
+        return self._to_card({"title": page_title, "snippet": ""})
 
     def _to_card(self, result: dict) -> Card | None:
         page_title = result.get("title")

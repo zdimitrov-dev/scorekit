@@ -37,7 +37,13 @@ class _FakeConnector:
 
 
 def _card(source: str, ext: str, title: str) -> Card:
-    return Card(source=source, external_id=ext, url=f"https://x/{ext}", title=title)
+    # The description names the piano because YouTube results pass through the piano
+    # filter on the way in; these tests are about caching, so the fixture should not be
+    # fighting that.
+    return Card(
+        source=source, external_id=ext, url=f"https://x/{ext}", title=title,
+        metadata={"description_excerpt": "solo piano performance"},
+    )
 
 
 @pytest.fixture

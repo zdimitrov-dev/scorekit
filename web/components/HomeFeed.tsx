@@ -2,68 +2,50 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw, Sparkles } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
+import { currentSignals, getFresh, refreshFeed } from "@/lib/feedCache";
 import Feed from "./Feed";
 
 /**
- * The home / recommendation feed — ranked by the content-based recommender.
+ * The home / recommendation feed.
  *
- * Likes and saves still live in localStorage (auth is Phase 5), so the browser posts its
- * own signals and the server ranks with them. The signals never persist server-side, so
- * this stays a per-browser feed until there are real accounts.
+ * Reads a **cache built ahead of time** (see lib/feedCache) rather than fetching on mount.
+ * Ranking needs the browser's like/save history, which the server cannot see, so Home used
+ * to paint a server-rendered board and then swap it once the real ranking arrived — a
+ * couple of seconds of the wrong order, then a jump. Now the ranking is normally already
+ * waiting, so the correct board paints immediately, and when it isn't ready the placeholder
+ * is neutral instead of being a different feed.
  */
-
-type RecResponse = { cards: FeedCard[]; personalized: boolean; error?: string };
-
-function readIds(key: string): string[] {
-  try {
-    const raw = localStorage.getItem(key);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-export default function HomeFeed({ fallback }: { fallback: FeedCard[] }) {
-  const [cards, setCards] = useState<FeedCard[]>(fallback);
+export default function HomeFeed() {
+  const [cards, setCards] = useState<FeedCard[] | null>(null);
   const [personalized, setPersonalized] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [signalCount, setSignalCount] = useState(0);
 
-  const refresh = useCallback(async () => {
-    const likes = readIds("scorekit:likes");
-    const saves = readIds("scorekit:saves");
-    const signals = [
-      ...likes.map((card_id) => ({ card_id, action: "like" })),
-      ...saves.map((card_id) => ({ card_id, action: "save" })),
-    ];
-    setSignalCount(signals.length);
-    setLoading(true);
-    try {
-      const res = await fetch("/api/recommend", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ signals, limit: 80 }),
-      });
-      const data = (await res.json()) as RecResponse;
-      if (!res.ok || !Array.isArray(data.cards)) throw new Error(data.error);
-      setCards(data.cards);
-      setPersonalized(data.personalized);
-      setFailed(false);
-    } catch {
-      // the board already on screen stays — better than blanking the page
-      setFailed(true);
-    } finally {
-      setLoading(false);
+  const load = useCallback(async (force: boolean) => {
+    setSignalCount(currentSignals().length);
+    const cached = force ? null : getFresh();
+    if (cached) {
+      setCards(cached.cards);
+      setPersonalized(cached.personalized);
+      return;
     }
+    setLoading(true);
+    const entry = await refreshFeed();
+    if (entry) {
+      setCards(entry.cards);
+      setPersonalized(entry.personalized);
+      setFailed(false);
+    } else {
+      setFailed(true);
+      setCards((prev) => prev ?? []);
+    }
+    setLoading(false);
   }, []);
 
-  // Re-rank on every mount, so navigating back from a search picks up what was liked
-  // there without needing a page reload.
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void load(false);
+  }, [load]);
 
   return (
     <div>
@@ -81,13 +63,13 @@ export default function HomeFeed({ fallback }: { fallback: FeedCard[] }) {
               liked and saved
             </>
           ) : failed ? (
-            "Showing the latest — recommendations are offline."
+            "Recommendations are offline."
           ) : (
             "Popular right now — like a few pieces to tune this feed."
           )}
         </span>
         <button
-          onClick={() => void refresh()}
+          onClick={() => void load(true)}
           disabled={loading}
           title="Rebuild the feed from everything you've liked and saved since"
           className="flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--surface-2)] px-3 py-1.5 font-medium transition-colors hover:text-[var(--foreground)] disabled:opacity-40"
@@ -96,11 +78,30 @@ export default function HomeFeed({ fallback }: { fallback: FeedCard[] }) {
           Refresh feed
         </button>
       </div>
-      <Feed
-        cards={cards}
-        maxColumns={3}
-        emptyLabel="Nothing here yet — search for a piece to get started."
-      />
+
+      {cards === null ? (
+        // Neutral placeholders, never a differently-ordered board: showing real cards in
+        // the wrong order and then re-sorting them is the flash this replaces.
+        <div className="flex gap-3">
+          {Array.from({ length: 3 }, (_, col) => (
+            <div key={col} className="flex-1 space-y-3">
+              {[240, 190, 270, 210].map((h, i) => (
+                <div
+                  key={i}
+                  style={{ height: h }}
+                  className="animate-pulse rounded-2xl bg-[var(--surface)]"
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Feed
+          cards={cards}
+          maxColumns={3}
+          emptyLabel="Nothing here yet — search for a piece to get started."
+        />
+      )}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import type { FeedCard, Source } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 import { cleanInstrumentation } from "@/lib/format";
 import { track } from "@/lib/track";
+import { refreshFeed } from "@/lib/feedCache";
 import SimilarStrip from "./SimilarStrip";
 
 const SOURCE_LABEL: Record<Source, string> = {
@@ -74,11 +75,20 @@ export default function CardModal({
   function toggleLike() {
     if (!liked) track({ action: "like", card_id: card.id, piece_id: card.piece?.id });
     likes.toggle(card.id);
+    queueFeedRebuild();
   }
 
   function toggleSave() {
     if (!saved) track({ action: "save", card_id: card.id, piece_id: card.piece?.id });
     saves.toggle(card.id);
+    queueFeedRebuild();
+  }
+
+  /** Start rebuilding the home ranking now, so it is ready before Home is next opened.
+   *  Deferred a beat because `toggle` writes localStorage during the state update, and the
+   *  rebuild reads it — running immediately would rank against the previous signals. */
+  function queueFeedRebuild() {
+    setTimeout(() => void refreshFeed(), 50);
   }
 
   const title = card.title ?? card.piece?.title ?? "Untitled";

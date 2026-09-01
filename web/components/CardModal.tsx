@@ -1,16 +1,22 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
-import { X, Heart, Bookmark, ExternalLink, FileMusic } from "lucide-react";
+import {
+  X, Heart, Bookmark, ExternalLink, FileMusic, ChevronLeft, ChevronRight,
+} from "lucide-react";
 import type { FeedCard, Source } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 import { cleanInstrumentation } from "@/lib/format";
+import { track } from "@/lib/track";
 
 const SOURCE_LABEL: Record<Source, string> = {
   youtube: "YouTube",
   imslp: "IMSLP",
   musescore: "MuseScore",
 };
+
+// Below this, an open is a mis-click rather than a view, and not training data.
+const MIN_VIEW_MS = 400;
 
 const SAMPLE_COMMENTS = [
   { user: "pianoDreamer", text: "This arrangement is gorgeous 😍", when: "2d" },
@@ -26,11 +32,50 @@ function Badge({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function CardModal({ card, onClose }: { card: FeedCard; onClose: () => void }) {
+export default function CardModal({
+  card,
+  onClose,
+  onNext,
+  onPrev,
+}: {
+  card: FeedCard;
+  onClose: () => void;
+  // Supplied by whichever component owns the list, so the modal can move through it
+  // without the user closing and reopening cards one at a time.
+  onNext?: () => void;
+  onPrev?: () => void;
+}) {
   const likes = useCollection("scorekit:likes");
   const saves = useCollection("scorekit:saves");
   const liked = likes.has(card.id);
   const saved = saves.has(card.id);
+  const openedAt = useRef(Date.now());
+
+  // How long a card was held open is the strongest engagement signal the feed produces —
+  // stronger than a like, which most people rarely click. Logged when moving on, so
+  // stepping through cards builds the training set as a side effect of normal use.
+  useEffect(() => {
+    openedAt.current = Date.now();
+    const id = card.id;
+    const pieceId = card.piece?.id;
+    return () => {
+      const dwell = Date.now() - openedAt.current;
+      // Sub-threshold opens aren't views: a mis-click, or React's development
+      // double-invoked effect, which was writing 1ms rows into the training data.
+      if (dwell < MIN_VIEW_MS) return;
+      track({ action: "click", card_id: id, piece_id: pieceId, dwell_ms: dwell });
+    };
+  }, [card.id, card.piece?.id]);
+
+  function toggleLike() {
+    if (!liked) track({ action: "like", card_id: card.id, piece_id: card.piece?.id });
+    likes.toggle(card.id);
+  }
+
+  function toggleSave() {
+    if (!saved) track({ action: "save", card_id: card.id, piece_id: card.piece?.id });
+    saves.toggle(card.id);
+  }
 
   const title = card.title ?? card.piece?.title ?? "Untitled";
   const composer = card.piece?.composer ?? card.metadata?.composer;
@@ -42,17 +87,23 @@ export default function CardModal({ card, onClose }: { card: FeedCard; onClose: 
   // URL — otherwise it's a redundant duplicate link (IMSLP/MuseScore case).
   const titleLinks = card.url !== sheetLink;
 
-  // lock background scroll while open + close on Escape
+  // lock background scroll while open; Escape closes, arrows move through the feed
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      // ignore arrows while typing, so the comment box keeps working
+      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      if (e.key === "ArrowRight") onNext?.();
+      if (e.key === "ArrowLeft") onPrev?.();
+    };
     window.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = prev;
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose]);
+  }, [onClose, onNext, onPrev]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6">
@@ -63,6 +114,27 @@ export default function CardModal({ card, onClose }: { card: FeedCard; onClose: 
         exit={{ opacity: 0 }}
         onClick={onClose}
       />
+
+      {/* Step through the feed without closing. Sits above the backdrop but outside the
+          card, so the arrows stay put while the card itself animates between pieces. */}
+      {onPrev && (
+        <button
+          onClick={onPrev}
+          aria-label="Previous card"
+          className="absolute left-1 z-20 hidden rounded-full bg-black/55 p-2.5 text-white transition-colors hover:bg-black/85 sm:block sm:left-3"
+        >
+          <ChevronLeft size={22} />
+        </button>
+      )}
+      {onNext && (
+        <button
+          onClick={onNext}
+          aria-label="Next card"
+          className="absolute right-1 z-20 hidden rounded-full bg-black/55 p-2.5 text-white transition-colors hover:bg-black/85 sm:block sm:right-3"
+        >
+          <ChevronRight size={22} />
+        </button>
+      )}
 
       <motion.div
         layoutId={`card-${card.id}`}
@@ -176,8 +248,17 @@ export default function CardModal({ card, onClose }: { card: FeedCard; onClose: 
 
           {/* actions */}
           <div className="flex items-center gap-2 border-t border-[var(--border)] p-4">
+            {onPrev && (
+              <button
+                onClick={onPrev}
+                aria-label="Previous card"
+                className="rounded-xl bg-[var(--surface-2)] p-2.5 transition-colors hover:bg-white/10 sm:hidden"
+              >
+                <ChevronLeft size={17} />
+              </button>
+            )}
             <button
-              onClick={() => likes.toggle(card.id)}
+              onClick={toggleLike}
               className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
                 liked ? "bg-[var(--accent)] text-white" : "bg-[var(--surface-2)] hover:bg-white/10"
               }`}
@@ -186,7 +267,7 @@ export default function CardModal({ card, onClose }: { card: FeedCard; onClose: 
               {liked ? "Liked" : "Like"}
             </button>
             <button
-              onClick={() => saves.toggle(card.id)}
+              onClick={toggleSave}
               className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
                 saved ? "bg-[var(--accent-2)] text-black" : "bg-[var(--surface-2)] hover:bg-white/10"
               }`}
@@ -194,6 +275,15 @@ export default function CardModal({ card, onClose }: { card: FeedCard; onClose: 
               <Bookmark size={17} fill={saved ? "currentColor" : "none"} />
               {saved ? "Saved" : "Save"}
             </button>
+            {onNext && (
+              <button
+                onClick={onNext}
+                aria-label="Next card"
+                className="rounded-xl bg-[var(--surface-2)] p-2.5 transition-colors hover:bg-white/10 sm:hidden"
+              >
+                <ChevronRight size={17} />
+              </button>
+            )}
           </div>
         </motion.div>
       </motion.div>

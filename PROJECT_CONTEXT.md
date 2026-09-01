@@ -234,6 +234,45 @@ score, listing)` · `interaction_action(like, skip, click)`
 
 ---
 
+## 5a. Interaction logging — **built** (`web/lib/track.ts`, `POST /interactions`)
+
+The dataset the learned ranker (§6b) will train on. Nothing existed before this: the
+`interactions` table was empty and likes lived only in `localStorage`, so there were no
+labelled examples of *(piece features → liked)* at all.
+
+**Identity.** An anonymous per-browser UUID in `localStorage`. No account, no PII — enough
+to group one person's history, and replaceable by a real user id when auth lands without a
+schema change. It must be a **UUID**, because `interactions.user_id` is a uuid column and
+anything else makes Postgres reject the entire batch.
+
+**What is logged.** `seen` when a card is genuinely viewed, `click` when it is opened (with
+how long it stayed open), `like`, `save`. Actions map onto the existing enum in
+`store.log_events` — `seen` becomes `skip`, which is exactly what the schema's own notes
+call the negative signal; `save` merges into `like` until `db/migrations/001` is applied.
+
+**Negatives come from impressions**, since the feed has no reject control: a card shown and
+passed over is the contrast a classifier needs. Quality of that signal took three fixes,
+each found by inspecting what actually landed in the table:
+- **Visibility, not rendering.** ≥50% visible for ≥900ms, via `IntersectionObserver`, so a
+  card that flew past during a fast scroll is not recorded as considered-and-rejected.
+- **Dwell measured on exit, not at the threshold.** Logging when the card first qualified
+  made every row report the same ~900ms — the column carried no information whatsoever,
+  though dwell is the entire point: it separates lingering from scrolling past.
+- **A settle timer.** A card that never leaves the viewport was never recorded, so the top
+  of the feed — the most reliably *seen* part — was the least logged. Cards still visible
+  after 8s are written then, which right-censors those dwell values at 8000ms; shorter
+  visits still record their true duration.
+
+Sub-400ms modal opens are discarded as mis-clicks; without that, React's development
+double-invoked effects were writing 1ms "views" into the training data.
+
+**Delivery.** Events queue and flush on a timer, and on the way out via `sendBeacon` —
+`fetch` is cancelled at unload and would silently drop the tail of every session. All
+failures are swallowed: this is telemetry, so a broken logger may cost some training data
+and must never cost the user their action.
+
+---
+
 ## 6a. Content-based recommender — **built** (`scorekit/tagging.py`, `scorekit/recommend.py`)
 
 The non-collaborative half is live and powers the home feed. It was built first on
@@ -323,6 +362,40 @@ Verified end-to-end through the UI with a composer absent from the corpus: searc
 three cards are all Grieg, followed by romantic neighbours (Liszt, Chopin, Rachmaninoff)
 and more Grieg at slot 8 — the consecutive ceiling visibly at work. Home re-ranks on every
 mount, and a **Refresh feed** control rebuilds it on demand.
+
+---
+
+## 6b. Learned ranker (next) — planned design
+
+A supervised model to sit **alongside** the content-based ranker, not replace it, so the
+project can show the heuristic and the learned model measured head-to-head on the same
+held-out interactions. The tag ranker weights features by `KEY_WEIGHTS`, which are numbers
+*chosen by hand*; the learned model derives them from behaviour, and the comparison is the
+interesting result either way.
+
+**Blocked on data, not code.** §5a now produces the dataset; a few real sessions are needed
+before any accuracy number means anything.
+
+**Model choice for this data regime** — sparse categorical tags plus a few numerics,
+hundreds of interactions rather than millions:
+- **Logistic regression** as the mandatory baseline. At this size it frequently beats
+  richer models, and its coefficients are directly comparable to `KEY_WEIGHTS`, so it
+  either validates those weights or corrects them.
+- **Gradient-boosted trees / random forest** as the main model: handles the categorical +
+  numeric mix, tolerates small *n* with depth limits, captures interactions a linear model
+  cannot ("romantic AND nocturne"), and exposes feature importances.
+- **Neural nets are deferred, deliberately.** Two-tower embedding models are what
+  production recommenders use, but they need roughly 10⁴–10⁶ interactions; below ~1,000 a
+  net overfits and loses to logistic regression while costing all interpretability. Revisit
+  at that volume, not before.
+
+**Labels.** Positive: `like`, `save`, and long-dwell `click`. Negative: `seen` with short
+dwell. Dwell weights the examples rather than being a feature, since it is only observed
+*after* a card is shown and is unavailable at scoring time.
+
+**Serving.** A third stage in the cascade, with content-based as the cold-start fallback
+for any user or piece the model has not seen — which, on a corpus that grows one search at
+a time, is a permanent condition rather than a temporary one.
 
 ---
 
@@ -510,7 +583,7 @@ Last.fm account — a consent/privacy step). Decide which warm-start seed to sup
 | 2 | IMSLP connector | ✅ Live + enriched + **disambiguation resolution** (Option A), gated by `IMSLP_ENABLED` (terms confirmed). Open: per-movement labeling, thumbnails/PDF links |
 | 3 | MuseScore via Tavily search (`include_domains=musescore.com`, cached) | ✅ Live and verified against the API (score-preview thumbnails rebuilt via the CDN). (Switched off Google CSE, which is closed to new projects.) Open: pagination, uploader/instrumentation parsing |
 | 4 | Feed UI (mixed-card masonry) | 🟡 In progress — Next.js `web/`: masonry board, bottom nav, framer-motion expand modal, like/save (localStorage), live streaming search + sorts + recent searches. Open: swipe, source-diversity ranking |
-| 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ⛔ Next up — the prerequisite for collaborative filtering |
+| 5 | Swipe interaction + logging (writes `interactions`; no ranking yet) | ✅ Logging live (see §5a) — impressions, dwell, likes/saves, modal step-through. Explicit swipe-to-reject UI still open |
 | 6 | Recommendation engine / home feed | 🟡 **Content-based half built and live** (see §6a) — tags + IDF affinity + popularity prior + diversity, ranking the home feed. Collaborative half awaits Phase 5 signal |
 | 7 | Polish + deploy (branding, domain, demo) | ⛔ |
 

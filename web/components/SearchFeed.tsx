@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { Search, Loader2, Clock } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
-import Feed from "./Feed";
+import Feed, { step } from "./Feed";
 import CardModal from "./CardModal";
 import ScoresDrawer from "./ScoresDrawer";
 
@@ -256,7 +256,15 @@ export default function SearchFeed() {
       )}
 
       <AnimatePresence>
-        {selected && <CardModal card={selected} onClose={() => setSelected(null)} />}
+        {selected && (
+          <CardModal
+            card={selected}
+            onClose={() => setSelected(null)}
+            // step within the list the card came from: the board and the scores drawer
+            // are separate runs, and jumping between them would be disorienting
+            {...step(selected.source === "youtube" ? videos : scores, selected, setSelected)}
+          />
+        )}
       </AnimatePresence>
     </div>
   );

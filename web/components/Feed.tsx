@@ -22,6 +22,24 @@ const BREAKPOINTS: [string, number][] = [
   ["(min-width: 768px)", 3],
 ];
 
+/**
+ * `onNext` / `onPrev` for stepping through a list from inside the modal. Returns only the
+ * directions that exist, so the modal doesn't render an arrow that goes nowhere at either
+ * end of the feed.
+ */
+export function step(
+  list: FeedCard[],
+  current: FeedCard,
+  select: (c: FeedCard) => void,
+): { onNext?: () => void; onPrev?: () => void } {
+  const i = list.findIndex((c) => c.id === current.id);
+  if (i < 0) return {};
+  return {
+    onPrev: i > 0 ? () => select(list[i - 1]) : undefined,
+    onNext: i < list.length - 1 ? () => select(list[i + 1]) : undefined,
+  };
+}
+
 function useColumnCount(): number {
   const [cols, setCols] = useState(2);
   useEffect(() => {
@@ -58,6 +76,10 @@ export default function Feed({
   // identity therefore wiped the board on click and unmounted the card mid-transition,
   // which is why the modal never appeared.
   const signature = useMemo(() => cards.map((c) => c.id).join("|"), [cards]);
+
+  // Rank in the ordered feed, kept as a lookup so rendering stays linear — the columns
+  // interleave the list, so a card's column position is not its feed position.
+  const rank = useMemo(() => new Map(cards.map((c, i) => [c.id, i])), [cards]);
 
   // A genuinely different list, or a column-count change, starts the layout over; only
   // appended cards preserve their placement.
@@ -121,6 +143,7 @@ export default function Feed({
                 // position within its own column — only used to stagger the entry
                 // animation, and stable so a card never re-animates on re-render
                 index={j}
+                position={rank.get(card.id)}
                 onSelect={select}
               />
             ))}
@@ -141,7 +164,13 @@ export default function Feed({
 
       {!onSelect && (
         <AnimatePresence>
-          {selected && <CardModal card={selected} onClose={() => setSelected(null)} />}
+          {selected && (
+            <CardModal
+              card={selected}
+              onClose={() => setSelected(null)}
+              {...step(cards, selected, setSelected)}
+            />
+          )}
         </AnimatePresence>
       )}
     </>

@@ -8,3 +8,4 @@ uvicorn[standard]>=0.30
 
 # dev
 pytest>=8.0
+psycopg2-binary  # migrations only (direct Postgres; DDL cannot go through PostgREST)

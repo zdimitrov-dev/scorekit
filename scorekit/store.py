@@ -59,6 +59,51 @@ def upsert_cards(piece_id: str, cards: list[Card], client: Any = None) -> int:
     return len(result.data)
 
 
+# What the feed reports -> what the `interaction_action` enum can currently store.
+#
+# `seen` is a card that was scrolled into view and not engaged with: the implicit negative
+# the recommender trains against. It maps to `skip` because that is precisely what the
+# schema means by skip — "there is no explicit dislike; absence of engagement is the
+# signal". `save` merges into `like` until db/migrations/001 is applied, which splits both
+# of these out; nothing else has to change when it is.
+_ACTION_MAP = {
+    "seen": "skip",
+    "skip": "skip",
+    "like": "like",
+    "save": "like",
+    "click": "click",
+}
+
+
+def log_events(events: list[dict[str, Any]], client: Any = None) -> int:
+    """Append interaction events. Returns the number of rows written.
+
+    Append-only and best-effort by design: this is the recommender's training signal, not
+    application state, so a lost event costs a little data and must never cost the user an
+    action. Unknown action names are dropped rather than raising.
+    """
+    rows = []
+    for e in events:
+        action = _ACTION_MAP.get(str(e.get("action", "")).lower())
+        if not action or not e.get("user_id"):
+            continue
+        dwell = e.get("dwell_ms")
+        position = e.get("feed_position")
+        rows.append({
+            "user_id": e["user_id"],
+            "card_id": e.get("card_id"),
+            "piece_id": e.get("piece_id"),
+            "action": action,
+            "dwell_ms": max(0, int(dwell)) if isinstance(dwell, (int, float)) else None,
+            "feed_position": int(position) if isinstance(position, (int, float)) else None,
+        })
+    if not rows:
+        return 0
+    client = client or get_client()
+    result = client.table("interactions").insert(rows).execute()
+    return len(result.data or [])
+
+
 def retag_piece(piece_id: str, client: Any = None) -> int:
     """Re-derive and replace this piece's ``piece_tags`` from its stored cards.
 

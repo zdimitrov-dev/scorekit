@@ -1,8 +1,19 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import type { FeedCard, Source } from "@/lib/types";
 import { cleanInstrumentation } from "@/lib/format";
+import { track } from "@/lib/track";
+
+// A card must be this visible, for this long, before it counts as seen. Impressions are
+// the recommender's negative examples, so a card that merely passed through the viewport
+// during a fast scroll must not be recorded as something the user looked at and rejected.
+const SEEN_RATIO = 0.5;
+const SEEN_MS = 900;
+// A card that never leaves the viewport is recorded after this long anyway. Without it the
+// cards at the top of the feed — the ones most reliably looked at — were the ones least
+// likely to be logged, because nothing ever triggered the write.
+const SETTLED_MS = 8000;
 
 // A remote thumbnail smaller than this isn't a usable preview — it's a favicon, a
 // tracking pixel, or a promo strip that slipped through. We render our own titled
@@ -37,11 +48,16 @@ export function fmtDuration(sec?: number): string | null {
 export default function PieceCard({
   card,
   index,
+  position,
   onSelect,
   compact = false,
 }: {
   card: FeedCard;
+  /** Position within its own column — staggers the entry animation only. */
   index: number;
+  /** Rank in the feed as a whole, logged for position-bias correction. Distinct from
+   *  `index`, which is per-column and would make every card look like rank 0-5. */
+  position?: number;
   onSelect: (c: FeedCard) => void;
   compact?: boolean;
 }) {
@@ -49,6 +65,70 @@ export default function PieceCard({
   // hotlinked assets, for one), so the tile is a runtime fallback, not just a
   // "no thumbnail_url" branch.
   const [thumbOk, setThumbOk] = useState(true);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Log the card as seen, with how long it actually stayed on screen.
+  //
+  // Recorded when it *leaves* the viewport, not when it first qualifies. Logging at the
+  // threshold made every impression report the same ~900ms and the dwell column carried no
+  // information at all — yet dwell is the whole point here: it separates a card someone
+  // lingered on from one they scrolled straight past, even though both are negatives.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const id = card.id;
+    const pieceId = card.piece?.id;
+    let enteredAt: number | null = null;
+    let visibleMs = 0;
+    let logged = false;
+
+    const record = () => {
+      if (enteredAt !== null) {
+        visibleMs += Date.now() - enteredAt;
+        enteredAt = null;
+      }
+      if (!logged && visibleMs >= SEEN_MS) {
+        logged = true;
+        track({
+          action: "seen",
+          card_id: id,
+          piece_id: pieceId,
+          feed_position: position,
+          dwell_ms: visibleMs,
+        });
+      }
+    };
+
+    let settle: ReturnType<typeof setTimeout> | null = null;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          enteredAt ??= Date.now();
+          settle ??= setTimeout(record, SETTLED_MS);
+        } else {
+          if (settle) clearTimeout(settle);
+          settle = null;
+          record();
+        }
+      },
+      { threshold: SEEN_RATIO },
+    );
+    observer.observe(el);
+
+    // Cards still on screen when the tab is hidden are recorded on a best effort: the
+    // tracker's own flush may already have run, in which case that last screenful is
+    // lost. Cheap to accept — normal scrolling records everything through the observer.
+    const onHide = () => document.visibilityState === "hidden" && record();
+    document.addEventListener("visibilitychange", onHide);
+
+    return () => {
+      if (settle) clearTimeout(settle);
+      document.removeEventListener("visibilitychange", onHide);
+      observer.disconnect();
+      record();
+    };
+  }, [card.id, card.piece?.id, position]);
+
   const src = SOURCE_STYLES[card.source];
   const title = card.title ?? card.piece?.title ?? "Untitled";
   const showThumb = Boolean(card.thumbnail_url) && thumbOk;
@@ -62,6 +142,7 @@ export default function PieceCard({
 
   return (
     <motion.div
+      ref={ref}
       layoutId={`card-${card.id}`}
       role="button"
       tabIndex={0}

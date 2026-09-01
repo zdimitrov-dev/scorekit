@@ -29,7 +29,7 @@ from .matching import MATCHER_VERSION, annotate_and_filter
 from .models import Piece
 from .normalize import normalize_slug
 from .recommend import rank_cards
-from .store import retag_piece, upsert_cards, upsert_piece
+from .store import log_events, retag_piece, upsert_cards, upsert_piece
 
 log = logging.getLogger("scorekit.api")
 
@@ -162,6 +162,43 @@ class RecommendRequest(BaseModel):
     # reads as the recommender ignoring the like. Liking a piece should surface *more* of
     # it, and the diversity pass stops that becoming a wall of one piece.
     exclude_seen: bool = True
+
+
+class InteractionEvent(BaseModel):
+    """One logged signal. ``action`` is the feed's vocabulary (seen/like/save/click/skip);
+    ``store.log_events`` maps it onto what the database can store."""
+
+    action: str
+    card_id: str | None = None
+    piece_id: str | None = None
+    dwell_ms: int | None = None
+    feed_position: int | None = None
+
+
+class InteractionBatch(BaseModel):
+    # An anonymous per-browser id, generated client-side. No account, no PII — enough to
+    # group one person's history for training, and replaceable by a real user id when auth
+    # lands without touching the schema.
+    user_id: str
+    events: list[InteractionEvent] = Field(default_factory=list)
+
+
+@app.post("/interactions")
+def interactions(batch: InteractionBatch) -> dict:
+    """Record feed signals — the recommender's training data (Phase 5).
+
+    Batched because an impression is logged for every card seen, and never allowed to fail
+    loudly: this is telemetry, so a broken write must cost some training data, never the
+    user's action.
+    """
+    try:
+        written = log_events([
+            {**e.model_dump(), "user_id": batch.user_id} for e in batch.events
+        ])
+    except Exception:
+        log.exception("failed to log %d interaction(s)", len(batch.events))
+        return {"written": 0, "ok": False}
+    return {"written": written, "ok": True}
 
 
 def _piece_tags(sb) -> dict[str, list[tuple[str, str]]]:

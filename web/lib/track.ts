@@ -99,6 +99,67 @@ export function track(event: TrackEvent) {
   timer ??= setTimeout(() => flush(), FLUSH_MS);
 }
 
+/**
+ * Send one event now, retrying briefly, and report whether it landed.
+ *
+ * Likes and saves are user actions, not telemetry. The batch queue above is right for
+ * impressions — losing one costs a little training data — but wrong for these: a like
+ * lives in localStorage the instant it is pressed and reaches the database only if this
+ * succeeds, so a swallowed failure leaves the two permanently disagreeing.
+ */
+export async function trackNow(event: TrackEvent, attempts = 3): Promise<boolean> {
+  const body = JSON.stringify({ user_id: viewerId(), events: [event] });
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const res = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        keepalive: true,
+      });
+      if (res.ok) return true;
+    } catch {
+      /* offline, or the API is restarting: worth another try */
+    }
+    await new Promise((r) => setTimeout(r, 300 * 2 ** attempt));
+  }
+  return false;
+}
+
+/**
+ * Reconcile this browser's likes and saves against the database.
+ *
+ * Retrying at the moment of the press is not enough on its own: a like made while the API
+ * was down is still missing afterwards, and nothing would ever notice. This runs at
+ * startup and backfills whatever the server does not already have, which makes the two
+ * stores converge instead of drifting further apart with every outage.
+ */
+export async function syncSignals(): Promise<number> {
+  const read = (key: string): string[] => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(key) || "[]");
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    } catch {
+      return [];
+    }
+  };
+  const likes = read("scorekit:likes");
+  const saves = read("scorekit:saves");
+  if (likes.length === 0 && saves.length === 0) return 0;
+  try {
+    const res = await fetch("/api/interactions/sync", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user_id: viewerId(), likes, saves }),
+    });
+    if (!res.ok) return 0;
+    const data = (await res.json()) as { inserted?: number };
+    return data.inserted ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 let listening = false;
 
 /** Flush on the way out. `visibilitychange` is the reliable signal — mobile browsers

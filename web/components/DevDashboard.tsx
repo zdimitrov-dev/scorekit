@@ -1,7 +1,8 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, FlaskConical, Database, Activity, Cpu, Eraser } from "lucide-react";
+import { RefreshCw, FlaskConical, Database, Activity, Cpu, Eraser, Play } from "lucide-react";
 import { clearBrowserSignals, getFresh } from "@/lib/feedCache";
+import { viewerId } from "@/lib/track";
 
 /**
  * Development dashboard. Not part of the product; remove before release.
@@ -145,14 +146,72 @@ export default function DevDashboard() {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const reset = useCallback(() => {
+  // Clears both sides at once. Wiping only the browser would leave this viewer's rows in
+  // the log, so the next training run would still be fitted on a history the feed no
+  // longer reflects — the two stores are meant to describe the same thing.
+  const reset = useCallback(async () => {
     if (confirming !== "signals") {
       setConfirming("signals");
       return;
     }
+    setConfirming(null);
+    setBusy(true);
+    try {
+      await fetch("/api/dev", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ user_id: viewerId() }),
+      });
+    } catch {
+      /* clear the browser regardless; the log can be cleared again from here */
+    }
     clearBrowserSignals();
     window.location.reload();
   }, [confirming]);
+
+  // Training runs on the server in a background thread; a tuned fit takes about forty
+  // seconds, which is far too long to hold a request open. So it is started, then polled.
+  const [training, setTraining] = useState(false);
+  const [trainMsg, setTrainMsg] = useState("");
+
+  const retrain = useCallback(
+    async (tune: boolean) => {
+      setTraining(true);
+      setTrainMsg(tune ? "Searching hyperparameters…" : "Fitting…");
+      try {
+        await fetch("/api/dev/train", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ tune }),
+        });
+        for (let i = 0; i < 120; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const res = await fetch("/api/dev/train", { cache: "no-store" });
+          const state = (await res.json()) as {
+            running: boolean;
+            error?: string | null;
+            result?: { message?: string; best?: string; scores?: { name: string; auc: number }[] };
+          };
+          if (state.running) continue;
+          if (state.error) {
+            setTrainMsg(`Failed: ${state.error}`);
+          } else if (state.result) {
+            const top = state.result.scores?.[0];
+            setTrainMsg(
+              (top ? `Best: ${top.name}, AUC ${top.auc.toFixed(3)}. ` : "") +
+                (state.result.message ?? ""),
+            );
+          }
+          break;
+        }
+      } catch {
+        setTrainMsg("Could not reach the API.");
+      }
+      setTraining(false);
+      await load();
+    },
+    [load],
+  );
 
   const clearLog = useCallback(
     async (action: string | null) => {
@@ -249,13 +308,30 @@ export default function DevDashboard() {
               </>
             ) : (
               <p className="text-sm text-[var(--muted)]">
-                Nothing trained yet. Run{" "}
-                <code className="font-mono text-xs">
-                  python -m scorekit.jobs.train_model --force
-                </code>
-                .
+                Nothing trained yet. Like a few pieces, then retrain.
               </p>
             )}
+            <div className="mt-3 space-y-1.5 border-t border-[var(--border)] pt-3">
+              <button
+                onClick={() => void retrain(false)}
+                disabled={training}
+                className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--surface-2)] px-3 py-2 text-xs font-medium transition-colors hover:text-[var(--foreground)] disabled:opacity-40"
+              >
+                <Play size={13} />
+                {training ? "Training…" : "Retrain (about 4s)"}
+              </button>
+              <button
+                onClick={() => void retrain(true)}
+                disabled={training}
+                className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--surface-2)] px-3 py-2 text-xs font-medium transition-colors hover:text-[var(--foreground)] disabled:opacity-40"
+              >
+                <Play size={13} />
+                {training ? "Training…" : "Retrain with tuning (about 40s)"}
+              </button>
+              {trainMsg && (
+                <p className="pt-1 text-xs leading-relaxed text-[var(--muted)]">{trainMsg}</p>
+              )}
+            </div>
           </Panel>
 
           <Panel title="Corpus" icon={<Database size={13} />}>
@@ -319,11 +395,11 @@ export default function DevDashboard() {
                 confirm="Press again to delete every interaction, likes included"
               />
               <Danger
-                onClick={reset}
+                onClick={() => void reset()}
                 armed={confirming === "signals"}
                 busy={busy}
-                idle="Clear browser likes and saves"
-                confirm="Press again to erase this browser's likes and saves"
+                idle="Fresh start: clear this browser and its rows"
+                confirm="Press again to erase this browser's history on both sides"
               />
             </div>
           </Panel>

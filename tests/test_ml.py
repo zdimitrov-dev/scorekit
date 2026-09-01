@@ -164,9 +164,11 @@ def test_gate_accepts_a_clear_win_on_enough_data():
     assert ok
 
 
-def test_serving_falls_back_when_no_model_is_promoted():
-    from scorekit.ml.serve import score_cards
-    assert score_cards([_card("chopin-1")], PIECE_TAGS, W, [("chopin-1", 1.0)]) is None
+def test_serving_falls_back_when_there_is_no_model(monkeypatch):
+    """Whatever happens to be in models/ must not decide the outcome of this test."""
+    from scorekit.ml import serve
+    monkeypatch.setattr(serve, "load_model", lambda: None)
+    assert serve.score_cards([_card("chopin-1")], PIECE_TAGS, W, [("chopin-1", 1.0)]) is None
 
 
 def test_ranker_uses_a_learned_relevance_when_given_one():
@@ -261,3 +263,22 @@ def test_simulated_users_are_identifiable_so_they_can_be_excluded():
     ids = simulated_user_ids()
     assert len(ids) == len(PERSONAS)
     assert all(len(i) == 36 for i in ids)
+
+
+def test_backfilled_rows_seed_the_profile_but_are_never_labelled():
+    """A reconciled like is real, but its created_at is the sync time. A block of them
+    sharing one instant makes the later ones trivially predictable, which inflates
+    held-out AUC without the model having learned anything."""
+    events = [
+        {"id": i, "user_id": "u", "action": "like", "card_id": "c1",
+         "piece_id": "chopin-1", "backfilled": True, "created_at": "2026-01-09"}
+        for i in range(1, 9)
+    ] + [
+        {"id": 9, "user_id": "u", "action": "impression", "card_id": "c1",
+         "piece_id": "chopin-1", "dwell_ms": 5000, "created_at": "2026-01-10"},
+    ]
+    data = build_dataset(events, {"c1": _card("chopin-1")}, PIECE_TAGS, W, warmup=0.0)
+    # Only the genuinely logged impression becomes a row.
+    assert len(data) == 1 and data.y == [0]
+    # ...but the backfilled likes still shaped the profile it was scored against.
+    assert dict(zip(FEATURE_NAMES, data.X[0]))["affinity_composer"] > 0

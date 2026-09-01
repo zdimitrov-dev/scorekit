@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
+from dataclasses import asdict
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +30,8 @@ from .matching import MATCHER_VERSION, annotate_and_filter
 from .models import Piece
 from .normalize import normalize_slug
 from .piano import filter_piano
-from .ml.registry import MIN_AUC_GAIN, MIN_POSITIVES, model_info
+from .ml.pipeline import start_training, training_state
+from .ml.registry import MIN_AUC_GAIN, MIN_POSITIVES, load_model, model_info
 from .ml.serve import score_cards
 from .recommend import SIGNAL_WEIGHTS, idf_weights, rank_cards
 from .similar import similar_cards
@@ -356,8 +358,10 @@ def dev_stats() -> dict:
 
 
 class ClearInteractionsRequest(BaseModel):
-    # None clears the whole table; naming one action clears only those rows.
+    # None clears every action; naming one clears only those rows.
     action: str | None = None
+    # None clears every user; naming one clears just that browser's history.
+    user_id: str | None = None
 
 
 @app.post("/dev/clear-interactions")
@@ -369,27 +373,120 @@ def dev_clear_interactions(req: ClearInteractionsRequest) -> dict:
     """
     sb = get_client()
 
-    def remaining() -> int:
-        q = sb.table("interactions").select("id", count="exact")
+    def scoped(q):
         if req.action:
             q = q.eq("action", req.action)
-        return q.limit(1).execute().count or 0
+        if req.user_id:
+            q = q.eq("user_id", req.user_id)
+        # A delete with no filter at all is refused, so match every row on a column that
+        # is never null.
+        return q if (req.action or req.user_id) else q.neq("action", "")
+
+    def remaining() -> int:
+        return scoped(sb.table("interactions").select("id", count="exact")
+                      ).limit(1).execute().count or 0
 
     before = remaining()
     # PostgREST caps a delete at its own row limit, so this repeats until the rows are
     # actually gone rather than assuming one call was enough.
     for _ in range(50):
-        q = sb.table("interactions").delete()
-        # A delete with no filter is refused, so match every row on a column that is
-        # never null.
-        q = q.eq("action", req.action) if req.action else q.neq("action", "")
-        q.execute()
+        scoped(sb.table("interactions").delete()).execute()
         if remaining() == 0:
             break
 
     left = remaining()
-    log.info("dev: cleared %d interaction rows (action=%s)", before - left, req.action or "all")
-    return {"deleted": before - left, "action": req.action, "remaining": left}
+    log.info("dev: cleared %d interaction rows (action=%s, user=%s)",
+             before - left, req.action or "all", (req.user_id or "all")[:8])
+    return {"deleted": before - left, "action": req.action,
+            "user_id": req.user_id, "remaining": left}
+
+
+class TrainRequest(BaseModel):
+    tune: bool = False
+    # Save a fit that failed the gate, marked unpromoted, so the toggle can try it.
+    force: bool = True
+    mode: str = "chronological"
+
+
+@app.post("/dev/train")
+def dev_train(req: TrainRequest) -> dict:
+    """Start a training run in the background. Poll GET /dev/train for the result.
+
+    Not synchronous: a tuned run takes about forty seconds, which no browser should be
+    asked to hold a request open for.
+    """
+    started = start_training(mode=req.mode, tune=req.tune, force=req.force)
+    return {"started": started, **_train_status()}
+
+
+@app.get("/dev/train")
+def dev_train_status() -> dict:
+    return _train_status()
+
+
+def _train_status() -> dict:
+    state = training_state()
+    result = state.get("result")
+    return {
+        "running": state["running"],
+        "error": state.get("error"),
+        "result": asdict(result) if result is not None else None,
+    }
+
+
+class SyncRequest(BaseModel):
+    user_id: str
+    likes: list[str] = []
+    saves: list[str] = []
+
+
+@app.post("/interactions/sync")
+def sync_interactions(req: SyncRequest) -> dict:
+    """Backfill likes and saves this browser holds that the log is missing.
+
+    Likes live in localStorage the moment they are pressed and reach the database only if
+    the request succeeds, so an outage leaves the two disagreeing with nothing to notice.
+    This converges them. Idempotent: only card ids with no existing row for this user and
+    action are inserted, so it is safe to call on every startup.
+    """
+    sb = get_client()
+    have: dict[str, set[str]] = {"like": set(), "save": set()}
+    seen = 0
+    while True:
+        rows = (sb.table("interactions").select("action,card_id")
+                .eq("user_id", req.user_id).in_("action", ["like", "save"])
+                .range(seen, seen + 999).execute().data or [])
+        for r in rows:
+            if r.get("card_id"):
+                have[r["action"]].add(r["card_id"])
+        seen += len(rows)
+        if len(rows) < 1000:
+            break
+
+    wanted = [("like", cid) for cid in req.likes] + [("save", cid) for cid in req.saves]
+    missing = [(a, cid) for a, cid in wanted if cid not in have[a]]
+    if not missing:
+        return {"inserted": 0, "already_present": len(wanted), "unknown_cards": 0}
+
+    # A card id the corpus no longer holds cannot be attributed to a piece, so it is
+    # reported rather than written as a row that trains on nothing.
+    by_card = {c["id"]: c.get("piece_id") for c in _all_cards(sb)}
+    events, unknown = [], 0
+    for action, cid in missing:
+        if cid not in by_card:
+            unknown += 1
+            continue
+        events.append({"user_id": req.user_id, "action": action,
+                       "card_id": cid, "piece_id": by_card[cid],
+                       # created_at will be now, not when it was pressed. Flagged so
+                       # training uses it for the profile but never as a labelled row.
+                       "backfilled": True})
+
+    written = log_events(events) if events else 0
+    if written:
+        log.info("sync: backfilled %d likes/saves for %s", written, req.user_id[:8])
+    return {"inserted": written, "already_present": len(wanted) - len(missing),
+            "unknown_cards": unknown}
 
 
 @app.get("/similar")

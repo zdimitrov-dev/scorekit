@@ -7,7 +7,7 @@ import {
 import type { FeedCard, Source } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 import { cleanInstrumentation } from "@/lib/format";
-import { track } from "@/lib/track";
+import { track, trackNow } from "@/lib/track";
 import { refreshFeed } from "@/lib/feedCache";
 import SimilarStrip from "./SimilarStrip";
 
@@ -73,13 +73,15 @@ export default function CardModal({
   }, [card.id, card.piece?.id]);
 
   function toggleLike() {
-    if (!liked) track({ action: "like", card_id: card.id, piece_id: card.piece?.id });
+    // trackNow, not track: a like is a user action, and the batch queue swallows
+    // failures. See track.ts.
+    if (!liked) void trackNow({ action: "like", card_id: card.id, piece_id: card.piece?.id });
     likes.toggle(card.id);
     queueFeedRebuild();
   }
 
   function toggleSave() {
-    if (!saved) track({ action: "save", card_id: card.id, piece_id: card.piece?.id });
+    if (!saved) void trackNow({ action: "save", card_id: card.id, piece_id: card.piece?.id });
     saves.toggle(card.id);
     queueFeedRebuild();
   }

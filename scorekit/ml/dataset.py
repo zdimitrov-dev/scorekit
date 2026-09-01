@@ -78,6 +78,10 @@ def build_dataset(
     ``warmup`` is the fraction of each user's history used only to seed their profile and
     never emitted as training rows. Without it the earliest rows are scored against an
     empty profile, where every affinity feature is 0 and the label looks like noise.
+
+    Rows flagged ``backfilled`` are treated the same way — used for the profile, never
+    emitted — because their ``created_at`` is the moment they were reconciled rather than
+    the moment they happened, so they carry no ordering information.
     """
     by_user: dict[str, list[dict[str, Any]]] = {}
     for e in events:
@@ -95,7 +99,12 @@ def build_dataset(
 
             # The profile is always built from *earlier* events only, so a row is never
             # scored against a profile that already contains its own label.
-            if i >= split and card is not None and piece_id:
+            # A backfilled row is a real like with a fabricated timestamp: it was written
+            # when the client reconciled, not when the button was pressed. It still seeds
+            # the profile below, but it cannot be a labelled row in a time-ordered
+            # evaluation — a block of them sharing one instant makes the later ones
+            # trivially predictable and inflates held-out AUC. See migration 002.
+            if i >= split and card is not None and piece_id and not event.get("backfilled"):
                 profile = build_profile(positives, piece_tags, weights)
                 if is_positive(event) or is_negative(event):
                     data.X.append(features_for(card, piece_tags, profile, weights))

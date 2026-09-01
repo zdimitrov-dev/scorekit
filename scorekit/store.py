@@ -6,11 +6,14 @@ to test in isolation with an injected client.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .db import get_client
 from .models import Card, Piece
 from .tagging import derive_tags, tag_rows
+
+log = logging.getLogger("scorekit.store")
 
 
 def upsert_piece(piece: Piece, client: Any = None) -> str:
@@ -74,6 +77,27 @@ _ACTION_MAP = {
 }
 
 
+_backfilled_column: bool | None = None
+
+
+def has_backfilled_column(client: Any = None) -> bool:
+    """Whether migration 002 has been applied.
+
+    Checked rather than assumed because the migration runner cannot reach the legacy
+    database host, so the column is usually applied by hand and may lag the code. Writing
+    a column that does not exist would fail the whole insert.
+    """
+    global _backfilled_column
+    if _backfilled_column is None:
+        try:
+            (client or get_client()).table("interactions").select("backfilled").limit(1).execute()
+            _backfilled_column = True
+        except Exception:
+            log.info("interactions.backfilled is missing; apply db/migrations/002")
+            _backfilled_column = False
+    return _backfilled_column
+
+
 def log_events(events: list[dict[str, Any]], client: Any = None) -> int:
     """Append interaction events. Returns the number of rows written.
 
@@ -88,14 +112,19 @@ def log_events(events: list[dict[str, Any]], client: Any = None) -> int:
             continue
         dwell = e.get("dwell_ms")
         position = e.get("feed_position")
-        rows.append({
+        row = {
             "user_id": e["user_id"],
             "card_id": e.get("card_id"),
             "piece_id": e.get("piece_id"),
             "action": action,
             "dwell_ms": max(0, int(dwell)) if isinstance(dwell, (int, float)) else None,
             "feed_position": int(position) if isinstance(position, (int, float)) else None,
-        })
+        }
+        # created_at is the sync time for a reconciled row, so it carries no ordering
+        # information and training must not read it as chronology. See migration 002.
+        if e.get("backfilled") and has_backfilled_column(client):
+            row["backfilled"] = True
+        rows.append(row)
     if not rows:
         return 0
     client = client or get_client()

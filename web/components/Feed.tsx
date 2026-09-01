@@ -40,15 +40,18 @@ export function step(
   };
 }
 
-function useColumnCount(): number {
+function useColumnCount(maxColumns: number): number {
   const [cols, setCols] = useState(2);
   useEffect(() => {
     const queries = BREAKPOINTS.map(([q, n]) => [window.matchMedia(q), n] as const);
-    const update = () => setCols(queries.find(([m]) => m.matches)?.[1] ?? 2);
+    // `maxColumns` caps the widest layout: the home board reads better with fewer,
+    // larger cards than with everything the viewport could technically fit.
+    const update = () =>
+      setCols(Math.min(maxColumns, queries.find(([m]) => m.matches)?.[1] ?? 2));
     update();
     queries.forEach(([m]) => m.addEventListener("change", update));
     return () => queries.forEach(([m]) => m.removeEventListener("change", update));
-  }, []);
+  }, [maxColumns]);
   return cols;
 }
 
@@ -56,9 +59,12 @@ export default function Feed({
   cards,
   emptyLabel,
   onSelect,
+  maxColumns = 4,
 }: {
   cards: FeedCard[];
   emptyLabel?: string;
+  /** Upper bound on columns at the widest breakpoint. */
+  maxColumns?: number;
   // when provided, selection is delegated to the parent (which owns the modal);
   // otherwise Feed manages its own modal.
   onSelect?: (c: FeedCard) => void;
@@ -67,7 +73,7 @@ export default function Feed({
   const [selected, setSelected] = useState<FeedCard | null>(null);
   const [columns, setColumns] = useState<FeedCard[][]>([]);
   const colRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const cols = useColumnCount();
+  const cols = useColumnCount(maxColumns);
   const select = onSelect ?? setSelected;
 
   // Identify the list by its contents, never by array identity. Callers build these
@@ -168,6 +174,7 @@ export default function Feed({
             <CardModal
               card={selected}
               onClose={() => setSelected(null)}
+              onSelectSimilar={setSelected}
               {...step(cards, selected, setSelected)}
             />
           )}

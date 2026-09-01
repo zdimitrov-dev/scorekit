@@ -29,7 +29,8 @@ from .matching import MATCHER_VERSION, annotate_and_filter
 from .models import Piece
 from .normalize import normalize_slug
 from .piano import filter_piano
-from .recommend import rank_cards
+from .recommend import idf_weights, rank_cards
+from .similar import similar_cards
 from .store import log_events, retag_piece, upsert_cards, upsert_piece
 
 log = logging.getLogger("scorekit.api")
@@ -285,6 +286,25 @@ def recommend(req: RecommendRequest) -> dict:
         "tagged_pieces": len(tags),
         # surfaced so a feed that silently stopped personalising is diagnosable
         "unknown_signals": unknown,
+    }
+
+
+@app.get("/similar")
+def similar(card_id: str, limit: int = 12) -> dict:
+    """Cards like one specific card — what the modal shows underneath it.
+
+    Ranked against the opened card alone, never against the viewer's taste, so it works
+    the first time someone clicks in and cannot pull the home feed around.
+    """
+    sb = get_client()
+    cards = _all_cards(sb)
+    anchor = next((c for c in cards if c["id"] == card_id), None)
+    if anchor is None:
+        return {"cards": [], "anchor": None}
+    tags = _piece_tags(sb)
+    return {
+        "anchor": card_id,
+        "cards": similar_cards(anchor, cards, tags, idf_weights(tags), limit),
     }
 
 

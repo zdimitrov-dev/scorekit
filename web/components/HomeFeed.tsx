@@ -96,7 +96,11 @@ export default function HomeFeed({ fallback }: { fallback: FeedCard[] }) {
           Refresh feed
         </button>
       </div>
-      <Feed cards={cards} emptyLabel="Nothing here yet — search for a piece to get started." />
+      <Feed
+        cards={cards}
+        maxColumns={3}
+        emptyLabel="Nothing here yet — search for a piece to get started."
+      />
     </div>
   );
 }

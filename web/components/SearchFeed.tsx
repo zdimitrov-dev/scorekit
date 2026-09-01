@@ -260,6 +260,7 @@ export default function SearchFeed() {
           <CardModal
             card={selected}
             onClose={() => setSelected(null)}
+            onSelectSimilar={setSelected}
             // step within the list the card came from: the board and the scores drawer
             // are separate runs, and jumping between them would be disorienting
             {...step(selected.source === "youtube" ? videos : scores, selected, setSelected)}

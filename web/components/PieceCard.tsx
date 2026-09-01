@@ -27,6 +27,21 @@ const SOURCE_STYLES: Record<Source, { label: string; cls: string }> = {
   musescore: { label: "MuseScore", cls: "bg-sky-500/90" },
 };
 
+// Every YouTube thumbnail is 16:9, so a board of them renders as a perfectly even grid
+// — measured: every card exactly 272px tall. Masonry needs varied heights to read as
+// masonry, so video cards are cropped to one of a few shapes, chosen deterministically
+// from the card id (stable across renders, so nothing jumps on re-render).
+//
+// Only video cards. Score images are portrait pages of sheet music and already vary;
+// forcing them into a 16:9 crop would slice the music off.
+const VIDEO_ASPECTS = ["16 / 9", "3 / 2", "4 / 3", "16 / 9", "5 / 4"];
+
+function aspectFor(id: string): string {
+  let s = 0;
+  for (let i = 0; i < id.length; i++) s += id.charCodeAt(i);
+  return VIDEO_ASPECTS[s % VIDEO_ASPECTS.length];
+}
+
 const PH_HEIGHTS = [180, 210, 240, 270, 200];
 const PH_HEIGHTS_COMPACT = [128, 146, 164, 138, 154];
 function phHeight(id: string, compact = false) {
@@ -51,6 +66,7 @@ export default function PieceCard({
   position,
   onSelect,
   compact = false,
+  track: shouldTrack = true,
 }: {
   card: FeedCard;
   /** Position within its own column — staggers the entry animation only. */
@@ -60,6 +76,10 @@ export default function PieceCard({
   position?: number;
   onSelect: (c: FeedCard) => void;
   compact?: boolean;
+  /** Log impressions for this card. Off inside "more like this": browsing one card's
+   *  neighbours is exploring, not rejecting, and would otherwise record a dozen
+   *  "not interested" votes every time a card is opened. */
+  track?: boolean;
 }) {
   // Some sources hand us a dead or unusably small image (MuseScore's CDN 403s on
   // hotlinked assets, for one), so the tile is a runtime fallback, not just a
@@ -75,7 +95,7 @@ export default function PieceCard({
   // lingered on from one they scrolled straight past, even though both are negatives.
   useEffect(() => {
     const el = ref.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
+    if (!shouldTrack || !el || typeof IntersectionObserver === "undefined") return;
     const id = card.id;
     const pieceId = card.piece?.id;
     let enteredAt: number | null = null;
@@ -127,7 +147,7 @@ export default function PieceCard({
       observer.disconnect();
       record();
     };
-  }, [card.id, card.piece?.id, position]);
+  }, [card.id, card.piece?.id, position, shouldTrack]);
 
   const src = SOURCE_STYLES[card.source];
   const title = card.title ?? card.piece?.title ?? "Untitled";
@@ -172,6 +192,11 @@ export default function PieceCard({
                 setThumbOk(false);
               }
             }}
+            style={
+              card.source === "youtube" && !compact
+                ? { aspectRatio: aspectFor(card.id) }
+                : undefined
+            }
             className={`w-full object-cover ${compact ? "max-h-52" : ""}`}
           />
           {/* hover: darken + title */}

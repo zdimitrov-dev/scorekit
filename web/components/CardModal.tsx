@@ -8,6 +8,7 @@ import type { FeedCard, Source } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 import { cleanInstrumentation } from "@/lib/format";
 import { track } from "@/lib/track";
+import SimilarStrip from "./SimilarStrip";
 
 const SOURCE_LABEL: Record<Source, string> = {
   youtube: "YouTube",
@@ -37,6 +38,7 @@ export default function CardModal({
   onClose,
   onNext,
   onPrev,
+  onSelectSimilar,
 }: {
   card: FeedCard;
   onClose: () => void;
@@ -44,6 +46,8 @@ export default function CardModal({
   // without the user closing and reopening cards one at a time.
   onNext?: () => void;
   onPrev?: () => void;
+  /** Open one of the "more like this" cards in place. */
+  onSelectSimilar?: (c: FeedCard) => void;
 }) {
   const likes = useCollection("scorekit:likes");
   const saves = useCollection("scorekit:saves");
@@ -138,7 +142,7 @@ export default function CardModal({
 
       <motion.div
         layoutId={`card-${card.id}`}
-        className="relative z-10 flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-[var(--surface)] ring-1 ring-[var(--border)] md:flex-row"
+        className="relative z-10 flex max-h-[90vh] w-full max-w-5xl flex-col overflow-y-auto overscroll-contain rounded-3xl bg-[var(--surface)] ring-1 ring-[var(--border)]"
       >
         <button
           onClick={onClose}
@@ -148,6 +152,7 @@ export default function CardModal({
           <X size={18} />
         </button>
 
+        <div className="flex flex-col md:flex-row">
         {/* media — left */}
         <div className="flex w-full shrink-0 items-center justify-center bg-black md:w-[60%]">
           {card.source === "youtube" ? (
@@ -162,9 +167,9 @@ export default function CardModal({
             </div>
           ) : card.thumbnail_url ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={card.thumbnail_url} alt="" className="max-h-[86vh] w-full object-contain md:max-h-[90vh]" />
+            <img src={card.thumbnail_url} alt="" className="max-h-[70vh] w-full object-contain" />
           ) : (
-            <div className="flex aspect-[3/4] w-full max-h-[86vh] flex-col items-center justify-center gap-2 bg-gradient-to-br from-[var(--surface-2)] to-[#2b2b38] p-6 text-center">
+            <div className="flex aspect-[3/4] w-full max-h-[70vh] flex-col items-center justify-center gap-2 bg-gradient-to-br from-[var(--surface-2)] to-[#2b2b38] p-6 text-center">
               <FileMusic size={40} className="text-[var(--muted)]" />
               <p className="font-mono text-sm text-[var(--muted)]">
                 {SOURCE_LABEL[card.source]} score{composer ? ` · ${composer}` : ""}
@@ -173,14 +178,12 @@ export default function CardModal({
           )}
         </div>
 
-        {/* info — right */}
-        <motion.div
-          className="flex w-full flex-col md:w-[40%]"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.12 }}
-        >
-          <div className="flex-1 overflow-y-auto p-5">
+        {/* info — right.
+            Plain div, not an animated one: it used to fade in, but the modal's height now
+            changes when "more like this" loads, which restarted the fade and left the
+            panel stranded at ~9% opacity — effectively invisible. */}
+        <div className="flex w-full flex-col md:w-[40%]">
+          <div className="flex-1 p-5">
             {titleLinks ? (
               <a
                 href={card.url}
@@ -285,7 +288,11 @@ export default function CardModal({
               </button>
             )}
           </div>
-        </motion.div>
+        </div>
+        </div>
+
+        {/* cards like this one — ranked against this card, not against the viewer */}
+        <SimilarStrip card={card} onSelect={onSelectSimilar ?? (() => {})} />
       </motion.div>
     </div>
   );

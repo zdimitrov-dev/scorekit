@@ -18,6 +18,7 @@ import logging
 import math
 import random
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..db import get_client
@@ -32,33 +33,69 @@ _NS = uuid.UUID("5c07e100-0000-4000-8000-000000000000")
 # whether it rediscovers this shape from behaviour alone.
 PERSONAS: dict[str, dict[tuple[str, str], float]] = {
     "romantic-pianist": {
-        ("era", "romantic"): 1.2,
-        ("composer", "chopin"): 1.6,
-        ("composer", "liszt"): 1.0,
-        ("form", "nocturne"): 1.4,
-        ("form", "ballade"): 1.2,
-        ("form", "etude"): 0.6,
+        ("era", "romantic"): 1.2, ("composer", "chopin"): 1.6,
+        ("composer", "liszt"): 1.0, ("form", "nocturne"): 1.4,
+        ("form", "ballade"): 1.2, ("form", "etude"): 0.6,
     },
     "baroque-keyboardist": {
-        ("era", "baroque"): 1.4,
-        ("composer", "bach"): 1.6,
-        ("composer", "scarlatti"): 0.9,
-        ("form", "fugue"): 1.2,
-        ("form", "invention"): 1.0,
-        ("form", "prelude"): 0.7,
+        ("era", "baroque"): 1.4, ("composer", "bach"): 1.6,
+        ("composer", "scarlatti"): 0.9, ("form", "fugue"): 1.2,
+        ("form", "prelude"): 0.7, ("form", "suite"): 0.8,
     },
     "impressionist-listener": {
-        ("era", "impressionist"): 1.5,
-        ("composer", "debussy"): 1.4,
-        ("composer", "satie"): 1.2,
-        ("form", "gymnopedie"): 1.0,
-        ("instrumentation", "piano"): 0.4,
+        ("era", "impressionist"): 1.5, ("composer", "debussy"): 1.4,
+        ("composer", "satie"): 1.2, ("instrumentation", "piano"): 0.4,
+    },
+    "classical-purist": {
+        ("era", "classical"): 1.4, ("composer", "mozart"): 1.3,
+        ("composer", "haydn"): 1.1, ("form", "sonata"): 1.0,
+        ("form", "minuet"): 0.8,
+    },
+    "virtuoso-chaser": {
+        ("composer", "liszt"): 1.5, ("composer", "rachmaninoff"): 1.5,
+        ("form", "etude"): 1.2, ("form", "concerto"): 1.0,
+        ("era", "romantic"): 0.6,
+    },
+    # Overlaps romantic-pianist heavily but not entirely: two people can share a taste
+    # without sharing it exactly, and a model that only works on disjoint users is not
+    # measuring generalisation.
+    "chopin-devotee": {
+        ("composer", "chopin"): 2.0, ("form", "nocturne"): 1.1,
+        ("form", "mazurka"): 1.0, ("form", "waltz"): 0.9,
+        ("era", "romantic"): 0.5,
+    },
+    "bach-completist": {
+        ("composer", "bach"): 2.0, ("form", "fugue"): 1.1,
+        ("form", "prelude"): 1.0, ("form", "variations"): 0.7,
+        ("era", "baroque"): 0.5,
+    },
+    "sonata-reader": {
+        ("form", "sonata"): 1.6, ("composer", "beethoven"): 1.3,
+        ("composer", "clementi"): 0.9, ("era", "classical"): 0.7,
+    },
+    "modernist": {
+        ("era", "modern"): 1.6, ("form", "rag"): 1.0,
+        ("form", "variations"): 0.7, ("composer", "satie"): 0.6,
+    },
+    "beginner-tutorials": {
+        ("format", "tutorial"): 1.8, ("composer", "clementi"): 0.9,
+        ("form", "minuet"): 0.8, ("form", "prelude"): 0.6,
+    },
+    "performance-watcher": {
+        ("format", "performance"): 1.5, ("form", "concerto"): 0.9,
+        ("composer", "rachmaninoff"): 0.8, ("era", "romantic"): 0.5,
+    },
+    "nordic-romantic": {
+        ("composer", "grieg"): 1.8, ("era", "romantic"): 0.9,
+        ("form", "suite"): 0.8, ("form", "waltz"): 0.6,
     },
 }
 
 # Turns a taste score into a like probability. The offset keeps likes genuinely rare, as
-# they are in a real feed — a model that only works on balanced data is not much use.
-_BIAS = -2.6
+# they are in a real feed — a model that only works on balanced data is not much use, and
+# an easy class balance flatters every metric. Tuned to land near one positive in ten,
+# which is still generous but the right order of magnitude.
+_BIAS = -4.2
 _SCALE = 1.5
 
 
@@ -85,7 +122,7 @@ def _page(sb, table: str, select: str) -> list[dict[str, Any]]:
             return out
 
 
-def simulate(sessions: int = 6, per_session: int = 40, seed: int = 0) -> int:
+def simulate(sessions: int = 10, per_session: int = 50, seed: int = 0) -> int:
     sb = get_client()
     cards = _page(sb, "cards", "id,piece_id,source,kind,metadata")
     tags: dict[str, list[tuple[str, str]]] = {}
@@ -99,16 +136,26 @@ def simulate(sessions: int = 6, per_session: int = 40, seed: int = 0) -> int:
     for name, persona in PERSONAS.items():
         user_id = str(uuid.uuid5(_NS, name))
         events: list[dict[str, Any]] = []
-        for _ in range(sessions):
+        # Sessions are spread over past days and events within one are seconds apart.
+        # Without this every row lands at insert time, and a chronological split over a
+        # single instant measures nothing — the same failure a client reconciliation
+        # caused with real likes.
+        first_session = datetime.now(timezone.utc) - timedelta(days=2 * sessions + 1)
+        for session in range(sessions):
+            session_start = first_session + timedelta(
+                days=2 * session, hours=rng.uniform(0, 14))
             # A session is a screenful of the feed: everything in it is *seen*, and a few
             # are engaged with. That is what makes impressions usable as negatives.
             batch = rng.sample(cards, min(per_session, len(cards)))
             for position, card in enumerate(batch):
+                occurred_at = (session_start
+                               + timedelta(seconds=position * rng.uniform(2.0, 9.0)))
                 piece_tags = tags.get(card["piece_id"], [])
                 p = _p_like(piece_tags, persona)
                 roll = rng.random()
                 base = {"card_id": card["id"], "piece_id": card["piece_id"],
-                        "feed_position": position}
+                        "feed_position": position,
+                        "occurred_at": occurred_at.isoformat()}
                 if roll < p * 0.45:
                     events.append({**base, "action": "save"})
                 elif roll < p:
@@ -140,8 +187,8 @@ def clear() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Synthetic interactions with a known taste.")
-    parser.add_argument("--sessions", type=int, default=6)
-    parser.add_argument("--per-session", type=int, default=40)
+    parser.add_argument("--sessions", type=int, default=10)
+    parser.add_argument("--per-session", type=int, default=50)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--clear", action="store_true", help="delete simulated rows and exit")
     args = parser.parse_args()

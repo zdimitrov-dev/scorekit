@@ -1,10 +1,9 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, RefreshCw, Sparkles, FlaskConical } from "lucide-react";
+import { Loader2, RefreshCw, Sparkles } from "lucide-react";
 import type { FeedCard } from "@/lib/types";
 import {
-  currentSignals, getFresh, getRankerOverride, refreshFeed, setRankerOverride,
-  type Ranker,
+  currentSignals, getFresh, getRankerOverride, refreshFeed, type Ranker,
 } from "@/lib/feedCache";
 import Feed from "./Feed";
 
@@ -24,14 +23,12 @@ export default function HomeFeed() {
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [signalCount, setSignalCount] = useState(0);
-  // Which ranker to ask for. "auto" is the real behaviour: the learned model only once it
-  // has passed its gate. "model" and "content" force one either way, which is the only
-  // thing that works as a toggle — once a model is promoted, "auto" serves it too, so
-  // flipping between "model" and "auto" changes nothing.
+  // Which ranker to ask for. "auto" is the product behaviour: the learned model only once
+  // it has passed its gate. It can be forced either way from the dev dashboard, which is
+  // the only place that control lives — this is the product surface.
   const [ranker, setRanker] = useState<Ranker>("auto");
   useEffect(() => setRanker(getRankerOverride()), []);
-  const [servedBy, setServedBy] = useState<string>("content");
-  const [modelAvailable, setModelAvailable] = useState(false);
+
 
   const load = useCallback(async (force: boolean, want: Ranker) => {
     setSignalCount(currentSignals().length);
@@ -39,8 +36,6 @@ export default function HomeFeed() {
     if (cached) {
       setCards(cached.cards);
       setPersonalized(cached.personalized);
-      setServedBy(cached.ranker);
-      setModelAvailable(cached.modelAvailable);
       return;
     }
     setLoading(true);
@@ -48,8 +43,6 @@ export default function HomeFeed() {
     if (entry) {
       setCards(entry.cards);
       setPersonalized(entry.personalized);
-      setServedBy(entry.ranker);
-      setModelAvailable(entry.modelAvailable);
       setFailed(false);
     } else {
       setFailed(true);
@@ -84,24 +77,6 @@ export default function HomeFeed() {
           )}
         </span>
         <span className="flex shrink-0 items-center gap-2">
-        {modelAvailable && (
-          <button
-            onClick={() => {
-              const next: Ranker = servedBy === "model" ? "content" : "model";
-              setRankerOverride(next);
-              setRanker(next);
-            }}
-            title="Switch between the trained model and the hand-tuned scoring"
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 font-medium transition-colors ${
-              servedBy === "model"
-                ? "bg-[var(--accent)] text-white"
-                : "bg-[var(--surface-2)] hover:text-[var(--foreground)]"
-            }`}
-          >
-            <FlaskConical size={13} />
-            {servedBy === "model" ? "Trained model" : "Content ranker"}
-          </button>
-        )}
         <button
           onClick={() => void load(true, ranker)}
           disabled={loading}

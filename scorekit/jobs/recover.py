@@ -32,14 +32,19 @@ from ..ml.pipeline import load_training_data
 from ..ml.registry import load_model
 from ..recommend import SIGNAL_WEIGHTS, affinity
 from ..recommend import build_profile as heuristic_profile
-from .simulate import _NS, PERSONAS
+from .simulate import _NS, COMBOS, PERSONAS, taste
 
 log = logging.getLogger("scorekit.recover")
 
 
-def _persona_score(tags: list[tuple[str, str]], persona: dict[tuple[str, str], float]) -> float:
-    """How much this persona actually wants the piece, by the written-down weights."""
-    return sum(persona.get(t, 0.0) for t in tags)
+def _persona_score(tags: list[tuple[str, str]], persona: dict[tuple[str, str], float],
+                   combos=None) -> float:
+    """How much this persona actually wants the piece, by the written-down weights.
+
+    Includes pair effects, or the answer key would disagree with the process that generated
+    the behaviour for exactly the personas the interactions were added for.
+    """
+    return taste(tags, persona, combos)
 
 
 def _hit(tags: list[tuple[str, str]], persona: dict[tuple[str, str], float]) -> bool:
@@ -127,7 +132,9 @@ def main() -> None:
         h_order = sorted(range(len(card_list)), key=lambda i: -h_scores[i])[:args.top]
 
         # The answer key: what the persona actually wants, by the written-down weights.
-        truth = [_persona_score(tags.get(c["piece_id"], []), persona) for c in card_list]
+        combos = COMBOS.get(name)
+        truth = [_persona_score(tags.get(c["piece_id"], []), persona, combos)
+                 for c in card_list]
         corpus_mean = sum(truth) / len(truth)
         ideal = sum(sorted(truth, reverse=True)[:args.top]) / args.top
 

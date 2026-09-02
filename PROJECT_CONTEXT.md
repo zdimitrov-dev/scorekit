@@ -461,7 +461,8 @@ measure is the one to read.
 **`feed_position` was tried and is off by default** (`--with-position`). Two findings, and
 the second matters more than the first.
 
-It did not help: forest 0.837 to 0.833 chronological, 0.866 to 0.860 cross-user, with
+It did not help. Measured on the earlier purely-linear personas, before the interaction
+ones existed: forest 0.837 to 0.833 chronological, 0.866 to 0.860 cross-user, with
 precision@10 falling from 0.60 to 0.40. But that is not evidence against position bias.
 `jobs/simulate` assigns position with `rng.sample` and its like probability depends only on
 tags, so the synthetic data contains no position effect to find. The column is noise there,

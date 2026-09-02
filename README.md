@@ -63,119 +63,52 @@ Cards from different sources are never merged into one grouped result. Each stay
 card; normalisation happens behind the scenes through a shared `piece_id` so preference
 signal can be attributed across sources.
 
-## Recommendation, and how it is evaluated
+## Recommendation
 
-Home is ranked by tag affinity: a profile is built from what you have liked and saved,
+Home is ranked by tag affinity. A profile is built from what you have liked and saved,
 weighted by signal strength and by how rare each tag is in the corpus, then every card is
-scored against it and a diversity pass stops one composer filling the board. That ranker is
-hand-tuned and it is what currently serves the feed.
+scored against it and a diversity pass stops one composer filling the board. This ranker is
+hand-tuned and it is what serves the feed today.
 
-Beside it sits a learned ranker. Four models are fitted and compared against the hand-tuned
+A learned ranker sits beside it. Four models are fitted and compared against the hand-tuned
 one on identical rows: logistic regression, random forest, a random forest whose
-hyperparameters are searched by cross-validation, and XGBoost. Features are crossed with
-the user's history rather than one-hot per composer, so the model learns how much composer
-matters relative to era instead of being told by hand-set weights.
+hyperparameters are cross-validated, and XGBoost. Features are crossed with the user's
+history rather than one-hot per composer, so 35 sparse columns become one dense one that
+works from the first like.
 
-### Evaluation
+**Evaluation** uses two splits. *Chronological* trains on each user's past to predict their
+future, which is the production question. *Cross-user* holds out whole people, asking
+whether it works for someone never seen. For every row the taste profile is rebuilt from
+only earlier events, or the profile would already contain the like being predicted.
 
-Two splits, answering different questions. **Chronological** splits each user's timeline
-and trains on their past to predict their future, which is the production question.
-**Cross-user** holds out whole people, which asks whether the model works for someone it
-has never seen. Both are needed: a model can do well on the first by learning the specific
-users it was given.
+Measured on sixteen simulated users, since a ranker cannot be judged before it has traffic.
+Their preferences are written down as numbers the model never sees; it only sees the
+behaviour those numbers produced. Twelve have tastes that are a weighted sum over tags;
+four also have interaction effects, which no weighted sum can express and which are the
+reason to reach for a tree at all.
 
-For every row, the user's taste profile is rebuilt from only what happened earlier than
-that row. Without that the profile already contains the like being predicted, and the model
-scores near-perfectly having learned nothing.
+| model | AUC (95% interval) | precision@10 |
+|---|---|---|
+| random forest | **0.857** (0.810 to 0.900) | 1.00 |
+| random forest, tuned | 0.851 (0.805 to 0.891) | 1.00 |
+| xgboost | 0.849 (0.802 to 0.893) | 0.90 |
+| logistic regression | 0.825 (0.775 to 0.873) | 1.00 |
+| hand-tuned baseline | 0.807 | 0.30 |
 
-Measured on sixteen simulated users, because a ranker cannot be judged before it has
-traffic. Their preferences are written down as numbers, the model only ever sees the
-behaviour those numbers produced, and the like rate is held near one in ten so an easy
-class balance does not flatter the metrics.
+AUC is the probability a liked piece scores above an unliked one, bootstrapped over 1,230
+held-out rows. The top three are statistically tied; the forest is separated from the
+baseline, and from logistic regression, which is the interesting part. Both the baseline
+and logistic regression are weighted sums, so neither can express a taste that depends on a
+*pair* of tags. Precision@10 is the sharper split: the baseline is 0.05 behind on AUC but
+gets 3 of its top 10 right against the forest's 10.
 
-Twelve have tastes that are a weighted sum over tags. Four also have **interaction
-effects**: "Chopin nocturnes yes, Chopin etudes no" is not a composer weight plus a form
-weight, since the etude penalty applies only in the presence of Chopin. Real taste is full
-of these, and they are the reason to reach for a tree model at all, since a tree can branch
-on one tag and then ask about another.
+**A promotion gate** decides what serves. A model needs 40 positives, a score better than
+chance, and a 0.03 AUC margin over the baseline. Below that the hand-tuned ranker keeps the
+feed. The threshold was set before any results existed and has not been moved. Nothing has
+passed on real logged data, which holds far too few likes to measure anything.
 
-| model | AUC, same users | AUC, held-out users | precision@10 |
-|---|---|---|---|
-| random forest | **0.857** | **0.862** | 1.00 |
-| random forest (tuned) | 0.851 | 0.856 | 1.00 |
-| xgboost | 0.849 | 0.845 | 0.90 |
-| logistic regression | 0.825 | 0.841 | 1.00 |
-| hand-tuned baseline | 0.807 | 0.828 | 0.30 |
-
-AUC is the probability the model scores a liked piece above an unliked one. The forest
-clears the gate by +0.050, and the mechanism is visible: it also pulls ahead of logistic
-regression, which it did not do before the interactions existed. Both the baseline and
-logistic regression are weighted sums, so neither can express a preference that depends on
-a pair of tags; the forest can.
-
-This is worth stating plainly, because it cuts the other way too. Without those four
-personas the synthetic data is generated by a weighted sum over tags, which is the exact
-functional form of the hand-tuned ranker. The baseline is then close to the true model and
-nothing beats it by much: forest 0.837 against baseline 0.823, inside the noise. The
-baseline is not unusually good, it was structurally matched to the test.
-
-### Did it recover the taste?
-
-AUC is computed against behaviour, which is what the model was fitted on, so a high score
-can come from learning the taste or from learning an artefact of collection. Simulated
-users are the one case where that is separable: rank the whole corpus for each persona and
-score the top ten against the preferences we wrote down. Scaled so 0% is a random ordering
-and 100% is the best any ranking could achieve, mean over twelve personas:
-
-| | recovered |
-|---|---|
-| hand-tuned baseline | **87%** |
-| learned model | 81% |
-
-**The two measurements disagree, and that is the most useful thing here.** The model wins
-decisively on held-out engagement and loses on recovering the taste.
-
-They are not measuring the same thing. AUC is computed over logged rows, which are cards
-the feed already chose to show. The recovery check ranks the entire corpus, most of which
-the user has never been shown. Home does the second thing, so the disagreement is not
-academic: the gate is judging the model on the easier question.
-
-One persona drives most of the gap. `romantic-sonatas-classical-miniatures`, whose taste is
-almost entirely negative interactions, scores 15% against the baseline's 100%. Excluding it
-the means are 85% and 86%. The model also wins several outright, taking `romantic-pianist`
-100% to 59% and `performance-watcher` 80% to 58%.
-
-The honest reading is that the forest is better at predicting the next engagement and not
-yet better at ranking cold corpus. Adding the recovery score as a second gate condition is
-the obvious response and is not done yet.
-
-### The gate
-
-A fitted model is not automatically worth serving. On a small or skewed log it can rank
-worse than the hand-tuned scoring, and shipping it would degrade the feed with nothing to
-indicate why. A model serves only once it has at least 40 likes or saves to measure
-against, beats chance, and beats the hand-tuned ranker by 0.03 AUC on held-out rows.
-
-On the interaction personas the forest passes at +0.050 and is promoted. On the earlier
-purely-linear ones it did not, at +0.017, and the feed kept the hand-tuned ranker. Nothing
-has passed on real logged data, which holds far too few likes to measure anything.
-
-The threshold was set before any of these results and has not been moved. Choosing it
-afterwards, to a value a particular model happens to clear, would make the gate an
-expensive way of agreeing with yourself.
-
-### Two results that were wrong
-
-A model scored 0.914 and passed the gate. It should not have. A client-side reconciliation
-had written 42 likes with the same timestamp, so "earlier" stopped meaning anything and the
-model saw 41 near-identical likes while predicting the 42nd. Events now carry the time they
-happened rather than the time the row was written, and rows whose real time is unknown seed
-the profile but are never scored against.
-
-The first version of the recovery check scored 100% everywhere. Its definition of success
-was "does the top ten contain any tag this persona wants", and a persona wanting `romantic`
-matches 274 of 582 pieces, so nothing could fail it. It is still reported next to the real
-measure, as a reminder that a metric everything passes measures nothing.
+Full method, the two evaluations that disagree, and the results that turned out to be
+wrong: see [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
 
 ## Setup
 

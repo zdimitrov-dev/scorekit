@@ -394,13 +394,24 @@ there is no ground truth, only a metric that may be high for the wrong reasons. 
 personas, some deliberately overlapping, 500 events each spread over twenty days, with a
 like rate near one in ten so an easy class balance does not flatter every metric.
 
-| model | AUC, same users | AUC, held-out users |
-|---|---|---|
-| heuristic (tag affinity) | 0.823 | 0.844 |
-| random forest (tuned) | **0.840** | 0.862 |
-| random forest | 0.837 | **0.866** |
-| logistic regression | 0.837 | 0.843 |
-| xgboost | 0.823 | 0.836 |
+| model | AUC, same users | 95% interval | AUC, held-out users |
+|---|---|---|---|
+| random forest | **0.857** | 0.810 to 0.900 | **0.862** |
+| random forest (tuned) | 0.851 | 0.805 to 0.891 | 0.856 |
+| xgboost | 0.849 | 0.802 to 0.893 | 0.845 |
+| logistic regression | 0.825 | 0.775 to 0.873 | 0.841 |
+| heuristic (tag affinity) | 0.807 | | 0.828 |
+
+Intervals are bootstrapped over the 1,230 held-out rows, 2,000 resamples. **The top
+three are tied.** Reading an ordering between them is reading noise: tuned minus
+untuned is -0.006, interval -0.069 to +0.055, straddling zero comfortably.
+
+That the tuned forest does not beat the untuned one is not a failure of tuning. A
+search optimises the *cross-validation estimate* on the training split, and with about
+48 positives per fold that estimate is noisy, so taking the maximum over 40 candidates
+partly takes noise. Tuning buys robustness when the defaults are badly wrong and buys
+nothing measurable when they are already reasonable. It stays because it is the honest
+way to choose settings, not because it always wins.
 
 Random Forest is the best model in both modes, and beats XGBoost in both, which is why
 several models are fitted rather than assuming boosting wins on tabular data.
@@ -420,16 +431,32 @@ are the one case where that ambiguity is escapable: their preferences exist as n
 model never sees. Ranking the whole corpus for each and scoring the top ten against those
 numbers, scaled so 0% is a random ordering and 100% is the best any ranking could achieve:
 
-| | mean over 12 personas |
+| | mean over 16 personas |
 |---|---|
-| learned model | **81%** |
-| heuristic | 79% |
+| heuristic (tag affinity) | **87%** |
+| learned model | 81% |
 
-Consistent with the AUC gap, and per-persona it is not uniform: the model takes
-nordic-romantic 100% to 42% and loses bach-completist 62% to 100%. A simpler "does the top
-ten contain any tag this persona wants" measure is also reported and is useless — every
-ranker scores 100%, because a persona wanting "romantic" matches 274 of 582 pieces. It is
-kept only to show why the scaled measure is the one to read.
+**The two measurements disagree, and that is the most useful thing here.** The model
+wins decisively on held-out engagement and loses on recovering the taste.
+
+The reason is that the answer key is written in the baseline's own vocabulary. Recovery
+scores a ranking against the persona's *tag* weights, and the baseline ranks on nothing
+but tag match, so the two speak the same language. The model predicts engagement from
+22 features, 13 of which describe the card rather than the taste: view count, duration,
+source, kind. In the simulator none of those affect whether a persona likes something,
+so any weight placed on them is a straight loss here. The model is penalised for using
+all the evidence available in a world where most of it is irrelevant by construction.
+
+Worth stating rather than filing under distribution shift, which was the first guess
+and was wrong: the simulator draws uniformly, so every card appears in training and the
+model is not extrapolating anywhere.
+
+It is also not uniform. The model takes `romantic-pianist` 100% to 59% and loses
+`romantic-sonatas-classical-miniatures` 15% to 100%; excluding that one persona the
+means are 85% and 86%. A simpler "does the top ten contain any tag this persona wants"
+measure is reported alongside and is useless, since every ranker scores 100% when a
+persona wanting "romantic" matches 274 of 582 pieces. Kept to show why the scaled
+measure is the one to read.
 
 **`feed_position` was tried and is off by default** (`--with-position`). Two findings, and
 the second matters more than the first.

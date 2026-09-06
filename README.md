@@ -6,7 +6,7 @@ and a like/save system learns your taste to personalise a home feed.
 
 ![The home feed: a ranked board of piano cards drawn from YouTube, IMSLP and MuseScore](docs/home-feed.png)
 
-Opening a card shows the piece alongside sheet music for it, ranked against that card
+Opening a card shows the piece alongside sheet music for it, recommended using that card
 rather than against your overall taste, so it works on the first click:
 
 ![A YouTube performance opened, with MuseScore sheet music for the same piece underneath](docs/card-and-similar.png)
@@ -23,25 +23,25 @@ Piano learners face a two-part gap that no single tool covers:
 ## Two feed modes
 
 - **Search** queries a specific piece and returns a mixed board from all three sources.
-  Pieces not yet in the corpus are ingested on demand and streamed in as they arrive.
-- **Home** has no query. It ranks the corpus against what you have liked and saved.
+  Pieces not yet in the database are ingested on demand and streamed in as they arrive.
+- **Home** has no query. It ranks the database against what you have liked and saved.
 
 ## Status
 
-All three source connectors are live. The corpus holds roughly 580 pieces seeded from
+All three source connectors are live. The database holds roughly 580 pieces seeded from
 IMSLP's catalogue, each carrying derived tags (composer, era, form, instrumentation). The
 feed UI is built, including live search, interaction logging and a content-based
 recommender.
 
 A learned ranker is wired in alongside it. In evaluation a random forest beats the
 hand-tuned baseline by 0.050 AUC, with precision@10 of 1.00 against 0.30. A promotion gate
-governs whether it actually serves: a model has to clear a fixed margin on held-out data
-before it replaces the baseline, and on the real interaction log there are not yet enough
-likes to measure that, so the hand-tuned ranker runs the feed today.
+governs whether it actually serves: The new model has to clear a fixed margin on held-out data
+before it replaces the baseline, and on a real interaction log there are not yet enough
+likes to measure that, so the hand-tuned ranker runs the feed until there are.
 
 ## Architecture
 
-- **Backend:** Python 3.13. Ingestion jobs per source, plus a FastAPI service the
+- **Backend:** Python 3.13. Ingestion jobs per source, with a FastAPI service the
   frontend calls for search, recommendations and interaction logging.
 - **Storage:** Supabase (managed Postgres).
 - **Frontend:** Next.js (App Router) with a masonry board.
@@ -84,7 +84,7 @@ hand-tuned and it is what serves the feed today.
 A learned ranker sits beside it. Four models are fitted and compared against the hand-tuned
 one on identical rows: logistic regression, random forest, a random forest whose
 hyperparameters are cross-validated, and XGBoost. Features are crossed with the user's
-history rather than one-hot per composer, so 35 sparse columns become one dense one that
+history rather than per composer, so 35 sparse columns become one dense one that
 works from the first like.
 
 **Evaluation** uses two splits. *Chronological* trains on each user's past to predict their
@@ -92,7 +92,7 @@ future, which is the production question. *Cross-user* holds out whole people, a
 whether it works for someone never seen. For every row the taste profile is rebuilt from
 only earlier events, or the profile would already contain the like being predicted.
 
-Measured on sixteen simulated users, since a ranker cannot be judged before it has traffic.
+Currently measured on sixteen simulated users, since a ranker cannot be judged before it has traffic.
 Their preferences are written down as numbers the model never sees; it only sees the
 behaviour those numbers produced. Twelve have tastes that are a weighted sum over tags;
 four also have interaction effects, which no weighted sum can express and which are the
@@ -113,8 +113,8 @@ and logistic regression are weighted sums, so neither can express a taste that d
 *pair* of tags. Precision@10 is the sharper split: the baseline is 0.05 behind on AUC but
 gets 3 of its top 10 right against the forest's 10.
 
-**A promotion gate** decides what serves. A model needs 40 positives, a score better than
-chance, and a 0.03 AUC margin over the baseline. Below that the hand-tuned ranker keeps the
+**A promotion gate** decides what model is used. A model needs 40 positives, a score better than
+chance (0.5), and a 0.03 AUC margin over the baseline. Below that the hand-tuned ranker keeps the
 feed. The threshold was set before any results existed and has not been moved. Nothing has
 passed on real logged data, which holds far too few likes to measure anything.
 
